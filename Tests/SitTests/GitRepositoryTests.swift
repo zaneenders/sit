@@ -24,8 +24,6 @@ struct GitRepositoryTests: ~Copyable {
   }
 
   @Test func `init`() async throws {
-    let repository = try await GitRepository(at: tempDirectory)
-
-    print("EHRE")
+    _ = try await GitRepository(at: tempDirectory)
   }
 }

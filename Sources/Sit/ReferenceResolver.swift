@@ -1,4 +1,5 @@
 import Foundation
+import NIOFileSystem
 
 /// Handles Git reference resolution including HEAD, branches, and packed-refs
 struct ReferenceResolver {
@@ -97,40 +98,39 @@ struct ReferenceResolver {
   /// - Parameter repository: Git repository instance
   /// - Returns: Current branch name or nil if detached
   /// - Throws: GitError if reading HEAD fails
-  static func getCurrentBranch(_ repository: GitRepository) throws -> String? {
-    let headPath = repository.gitPath("HEAD")
-    let headContent = try repository.readFileString(headPath)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
+  static func getCurrentBranch(_ repository: GitRepository) async throws -> String? {
+    let headPath = repository.gitPath.appending("HEAD")
+    let fh = try await FileSystem.shared.openFile(forReadingAt: headPath)
+    let info = try await fh.info()
+    try await fh.close()
+    let contents = try await String(contentsOf: headPath, maximumSizeAllowed: .bytes(info.size))
 
-    guard headContent.hasPrefix("ref: ") else {
+    guard contents.hasPrefix("ref: ") else {
       return nil  // Detached HEAD
     }
 
-    let refPath = String(headContent.dropFirst(5))
+    let ref = String(contents.dropFirst(5))
 
     // Extract branch name from refs/heads/branch-name
-    if refPath.hasPrefix("refs/heads/") {
-      return String(refPath.dropFirst("refs/heads/".count))
+    if ref.hasPrefix("refs/heads/") {
+      return String(ref.dropFirst("refs/heads/".count))
     }
 
     // Handle other reference types (remote branches, tags, etc.)
-    if refPath.hasPrefix("refs/") {
-      return String(refPath.dropFirst("refs/".count))
+    if ref.hasPrefix("refs/") {
+      return String(ref.dropFirst("refs/".count))
     }
-
-    return refPath
+    return nil
   }
 
   /// Check if HEAD is detached
   /// - Parameter repository: Git repository instance
   /// - Returns: true if HEAD is detached, false otherwise
   /// - Throws: GitError if reading HEAD fails
-  static func isDetachedHEAD(_ repository: GitRepository) throws -> Bool {
-    let headPath = repository.gitPath("HEAD")
-    let headContent = try repository.readFileString(headPath)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-
-    return !headContent.hasPrefix("ref: ")
+  static func isDetachedHEAD(_ repository: GitRepository) async throws -> Bool {
+    let headPath = repository.gitPath.appending("HEAD")
+    let headContents = try await String(contentsOf: headPath, maximumSizeAllowed: .bytes(.max))
+    return !headContents.hasPrefix("ref: ")
   }
 
   /// Get all local branches
@@ -309,13 +309,13 @@ extension GitRepository {
   }
 
   /// Get current branch name (nil if detached HEAD)
-  func getCurrentBranch() throws -> String? {
-    return try ReferenceResolver.getCurrentBranch(self)
+  func getCurrentBranch() async throws -> String? {
+    return try await ReferenceResolver.getCurrentBranch(self)
   }
 
   /// Check if HEAD is detached
-  func isDetachedHEAD() throws -> Bool {
-    return try ReferenceResolver.isDetachedHEAD(self)
+  func isDetachedHEAD() async throws -> Bool {
+    return try await ReferenceResolver.isDetachedHEAD(self)
   }
 
   /// Get all local branches

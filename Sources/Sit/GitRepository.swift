@@ -3,8 +3,16 @@ import NIOFileSystem
 
 /// Main repository class that encapsulates Git operations
 struct GitRepository {
-  let gitDir: URL
-  let workTree: URL
+  let gitPath: FilePath
+  let workTreePath: FilePath
+  var gitDir: URL {
+    print(#function, gitPath)
+    return URL(fileURLWithPath: "file://" + gitPath.string).standardizedFileURL
+  }
+  var workTree: URL {
+    print(#function, workTreePath)
+    return URL(fileURLWithPath: "file://" + workTreePath.string).standardizedFileURL
+  }
 
   /// Initialize a Git repository at the given path
   /// - Parameter path: Path to the working tree (defaults to current directory)
@@ -14,15 +22,15 @@ struct GitRepository {
     if let info = try await FileSystem.shared.info(forFileAt: gitDir, infoAboutSymbolicLink: false) {
       switch info.type {
       case .directory:
-        self.workTree = URL(fileURLWithPath: path.string).standardizedFileURL
-        self.gitDir = URL(fileURLWithPath: gitDir.string).standardizedFileURL
+        self.workTreePath = path
+        self.gitPath = gitDir
       default:
         throw GitError.invalidRepository("No .git directory found at \(path). Found \(info.type).")
       }
     } else {
       try await FileSystem.shared.createDirectory(at: gitDir, withIntermediateDirectories: true)
-      self.workTree = URL(fileURLWithPath: path.string).standardizedFileURL
-      self.gitDir = URL(fileURLWithPath: gitDir.string).standardizedFileURL
+      self.workTreePath = path
+      self.gitPath = gitDir
     }
   }
 
@@ -30,14 +38,17 @@ struct GitRepository {
   /// - Parameters:
   ///   - gitDir: Path to .git directory
   ///   - workTree: Path to working tree
-  init(gitDir: URL, workTree: URL) throws {
-    var isDir: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: gitDir.path, isDirectory: &isDir), isDir.boolValue else {
-      throw GitError.invalidRepository("Invalid git directory: \(gitDir.path)")
+  init(gitDir: FilePath, workTree: FilePath) async throws {
+    if let info = try await FileSystem.shared.info(forFileAt: gitDir, infoAboutSymbolicLink: false) {
+      switch info.type {
+      case .directory:
+        ()
+      default:
+        throw GitError.invalidRepository("Invalid git directory: \(gitDir)")
+      }
     }
-
-    self.gitDir = gitDir
-    self.workTree = workTree
+    self.workTreePath = workTree
+    self.gitPath = gitDir
   }
 
   // MARK: - Path Utilities

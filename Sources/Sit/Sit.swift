@@ -15,7 +15,7 @@ enum Sit {
   static func status(at path: FilePath = ".") async throws -> StatusResult {
     let repository = try await GitRepository(at: path)
     let statusCalculator = StatusCalculator(repository: repository)
-    return try statusCalculator.calculateStatus()
+    return try await statusCalculator.calculateStatus()
   }
 }
 
@@ -28,10 +28,10 @@ class StatusCalculator {
   }
 
   /// Calculate the complete status of the repository
-  func calculateStatus() throws -> StatusResult {
+  func calculateStatus() async throws -> StatusResult {
     // Get current branch information
-    let branch = try repository.getCurrentBranch()
-    let isDetached = try repository.isDetachedHEAD()
+    let branch = try await repository.getCurrentBranch()
+    let isDetached = try await repository.isDetachedHEAD()
 
     // Read index entries
     let indexEntries = try repository.readIndex()

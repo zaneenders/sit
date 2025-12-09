@@ -1,5 +1,5 @@
 import Foundation
-import _NIOFileSystem
+import NIOFileSystem
 
 /// Scans the working directory and collects file information
 class WorkingDirectoryScanner {
