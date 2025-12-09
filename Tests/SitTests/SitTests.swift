@@ -6,8 +6,8 @@ import Testing
 struct SitTests {
 
   @Test func sha1() {
-    let hash = Sit.sha1("Scribe".data(using: .utf32)!)
-    #expect("fa0712116f9015471827ebe605bc71071de6fef1" == hash)
+    let hash = Sit.sha1("Sit".data(using: .utf32)!)
+    #expect("e046cbae32f1992239732b3fb5f9a388aae5b925" == hash)
   }
 
   @Test func status() throws {
