@@ -1,5 +1,5 @@
 import Foundation
-import _NIOFileSystem
+import NIOFileSystem
 
 /// Main repository class that encapsulates Git operations
 struct GitRepository {
@@ -9,18 +9,21 @@ struct GitRepository {
   /// Initialize a Git repository at the given path
   /// - Parameter path: Path to the working tree (defaults to current directory)
   /// - Throws: GitError.invalidRepository if not a valid Git repository
-  init(at path: String = ".") throws {
-    let workTreeURL = URL(fileURLWithPath: path).standardizedFileURL
-    let gitDirURL = workTreeURL.appendingPathComponent(".git")
-
-    // Check if .git directory exists
-    var isDir: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: gitDirURL.path, isDirectory: &isDir), isDir.boolValue else {
-      throw GitError.invalidRepository("No .git directory found at \(gitDirURL.path)")
+  init(at path: FilePath = ".") async throws {
+    let gitDir = path.appending(".git")
+    if let info = try await FileSystem.shared.info(forFileAt: gitDir, infoAboutSymbolicLink: false) {
+      switch info.type {
+      case .directory:
+        self.workTree = URL(fileURLWithPath: path.string).standardizedFileURL
+        self.gitDir = URL(fileURLWithPath: gitDir.string).standardizedFileURL
+      default:
+        throw GitError.invalidRepository("No .git directory found at \(path). Found \(info.type).")
+      }
+    } else {
+      try await FileSystem.shared.createDirectory(at: gitDir, withIntermediateDirectories: true)
+      self.workTree = URL(fileURLWithPath: path.string).standardizedFileURL
+      self.gitDir = URL(fileURLWithPath: gitDir.string).standardizedFileURL
     }
-
-    self.workTree = workTreeURL
-    self.gitDir = gitDirURL
   }
 
   /// Initialize with explicit git directory and work tree paths
@@ -205,7 +208,7 @@ struct GitRepository {
 
 extension GitRepository {
   /// Create a repository by searching up the directory tree
-  static func findRepository(from path: String = ".") throws -> GitRepository {
+  static func findRepository(from path: String = ".") async throws -> GitRepository {
     let currentURL = URL(fileURLWithPath: path).standardizedFileURL
     var searchURL = currentURL
 
@@ -214,7 +217,7 @@ extension GitRepository {
       var isDir: ObjCBool = false
 
       if FileManager.default.fileExists(atPath: gitDir.path, isDirectory: &isDir), isDir.boolValue {
-        return try GitRepository(at: searchURL.path)
+        return try await GitRepository(at: FilePath(searchURL.path))
       }
 
       // Move to parent directory

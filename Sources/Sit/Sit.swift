@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import NIOFileSystem
 
 enum Sit {
   static func sha1(_ data: Data) -> String {
@@ -11,8 +12,8 @@ enum Sit {
   /// - Parameter path: Path to repository (defaults to current directory)
   /// - Returns: Status result with staged, unstaged, and untracked changes
   /// - Throws: GitError if status cannot be determined
-  static func status(at path: String = ".") throws -> StatusResult {
-    let repository = try GitRepository(at: path)
+  static func status(at path: FilePath = ".") async throws -> StatusResult {
+    let repository = try await GitRepository(at: path)
     let statusCalculator = StatusCalculator(repository: repository)
     return try statusCalculator.calculateStatus()
   }

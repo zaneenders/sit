@@ -1,3 +1,3 @@
 # Sit
 
-A Swift package for `git`.
+A Swift implementation of Git core functionality.
