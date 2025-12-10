@@ -1,8 +1,13 @@
 import Foundation
 import NIOFileSystem
+import Subprocess
 import Testing
 
 @testable import Sit
+
+#if canImport(System)
+import System
+#endif
 
 @Suite
 struct SitTests: ~Copyable {
@@ -57,23 +62,57 @@ struct SitTests: ~Copyable {
   }
 
   @Test func gitRepository() async throws {
-    // Test repository initialization
     let repo = try await GitRepository(at: ".")
 
-    // Should be able to get basic repository info
     let currentBranch = try await repo.getCurrentBranch()
     let isDetached = try await repo.isDetachedHEAD()
 
-    // Should not throw
     #expect(currentBranch != nil || isDetached)
   }
 
   @Test func indexParsing() async throws {
-    // Test index parsing
     let repo = try await GitRepository(at: ".")
     let indexEntries = try repo.readIndex()
 
-    // Should return array (possibly empty)
     #expect(indexEntries.count >= 0)
   }
+
+  @Test func commitFunctionality() async throws {
+    _ = try await runGitCommand(at: tempDirectory, arguments: ["init"])
+    _ = try await GitRepository(at: tempDirectory)
+
+    let testFilePath = tempDirectory.appending("test.txt")
+    let testContent = "Hello, World!"
+    try testContent.write(to: URL(fileURLWithPath: testFilePath.string), atomically: true, encoding: .utf8)
+
+    _ = try await runGitCommand(at: tempDirectory, arguments: ["add", "test.txt"])
+
+    let commitSHA1 = try await Sit.commit(message: "Test commit from Sit", at: tempDirectory)
+    print(commitSHA1)
+
+    let statusOutput = try await runGitCommand(at: tempDirectory, arguments: ["status"])
+    print("statusOutput", statusOutput)
+  }
+}
+
+private func initializeGitRepo(at path: FilePath) async throws {
+  _ = try await runGitCommand(at: path, arguments: ["init"])
+  _ = try await runGitCommand(at: path, arguments: ["config", "user.name", "Test User"])
+  _ = try await runGitCommand(at: path, arguments: ["config", "user.email", "test@example.com"])
+}
+
+private func runGitCommand(at path: FilePath, arguments: [String]) async throws -> String {
+
+  let result = try await Subprocess.run(
+    .name("git"),
+    arguments: Arguments(arguments),
+    workingDirectory: System.FilePath(path.string),
+    output: .string(limit: .max, encoding: UTF8.self),
+    error: .string(limit: .max, encoding: UTF8.self)
+  )
+
+  let error = result.standardError ?? ""
+  let out = result.standardOutput ?? ""
+
+  return out + " | " + error
 }

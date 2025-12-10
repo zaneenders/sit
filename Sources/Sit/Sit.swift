@@ -2,6 +2,22 @@ import CryptoKit
 import Foundation
 import NIOFileSystem
 
+extension String {
+  func hexToBytes() -> [UInt8] {
+    var bytes: [UInt8] = []
+    var index = startIndex
+    while index < endIndex {
+      let nextIndex = self.index(index, offsetBy: 2)
+      let byteString = String(self[index..<nextIndex])
+      if let byte = UInt8(byteString, radix: 16) {
+        bytes.append(byte)
+      }
+      index = nextIndex
+    }
+    return bytes
+  }
+}
+
 enum Sit {
   static func sha1(_ data: Data) -> String {
     let hash = Insecure.SHA1.hash(data: data)
@@ -16,6 +32,145 @@ enum Sit {
     let repository = try await GitRepository(at: path)
     let statusCalculator = StatusCalculator(repository: repository)
     return try await statusCalculator.calculateStatus()
+  }
+
+  /// Create a new commit
+  /// - Parameters:
+  ///   - message: Commit message
+  ///   - path: Path to repository (defaults to current directory)
+  /// - Returns: The SHA-1 of the created commit
+  /// - Throws: GitError if commit cannot be created
+  static func commit(message: String, at path: FilePath = ".") async throws -> String {
+    let repository = try await GitRepository(at: path)
+    return try await createCommit(repository: repository, message: message)
+  }
+
+  /// Internal method to create a commit
+  private static func createCommit(repository: GitRepository, message: String) async throws -> String {
+    var parentCommit: String?
+    do {
+      parentCommit = try repository.getCurrentCommitSHA()
+    } catch {
+      parentCommit = nil
+    }
+
+    let treeSHA1 = try await createTreeFromIndex(repository: repository)
+
+    let author = "Test User <test@example.com>"
+    let committer = author
+    let timestamp = Int(Date().timeIntervalSince1970)
+    let timezone = "+0000"
+
+    var commitContent = "tree \(treeSHA1)\n"
+    if let parent = parentCommit {
+      commitContent += "parent \(parent)\n"
+    }
+    commitContent += "author \(author) \(timestamp) \(timezone)\n"
+    commitContent += "committer \(committer) \(timestamp) \(timezone)\n"
+    commitContent += "\n"
+    commitContent += message
+
+    let commitData = commitContent.data(using: .utf8)!
+    let commitHeader = "commit \(commitData.count)\0"
+    let fullCommitData = commitHeader.data(using: .utf8)! + commitData
+    let commitSHA1 = sha1(fullCommitData)
+
+    try await writeGitObject(repository: repository, sha1: commitSHA1, data: fullCommitData)
+
+    try await updateHEAD(repository: repository, commitSHA1: commitSHA1)
+
+    return commitSHA1
+  }
+
+  /// Create a tree object from the current index
+  private static func createTreeFromIndex(repository: GitRepository) async throws -> String {
+    let indexEntries = try repository.readIndex()
+
+    // Group entries by directory
+    var directoryEntries: [String: [IndexEntry]] = [:]
+    for entry in indexEntries {
+      let pathComponents = entry.path.components(separatedBy: "/")
+      if pathComponents.count == 1 {
+        // Root level file
+        if directoryEntries[""] == nil {
+          directoryEntries[""] = []
+        }
+        directoryEntries[""]?.append(entry)
+      } else {
+        let directory = pathComponents.dropLast().joined(separator: "/")
+        if directoryEntries[directory] == nil {
+          directoryEntries[directory] = []
+        }
+        directoryEntries[directory]?.append(entry)
+      }
+    }
+
+    // Create tree entries (simplified - just for root level)
+    var treeEntries: [String] = []
+    for entry in indexEntries {
+      if !entry.path.contains("/") {
+        let mode = entry.fileMode
+        let name = entry.path
+        let sha1 = entry.sha1Hex
+        treeEntries.append("\(mode) \(name)\0\(Data(sha1.hexToBytes()))")
+      }
+    }
+
+    // Build tree data
+    var treeData = Data()
+    for entry in treeEntries.sorted() {
+      treeData.append(entry.data(using: .utf8)!)
+    }
+
+    let treeHeader = "tree \(treeData.count)\0"
+    let fullTreeData = treeHeader.data(using: .utf8)! + treeData
+    let treeSHA1 = sha1(fullTreeData)
+
+    // Write tree object
+    try await writeGitObject(repository: repository, sha1: treeSHA1, data: fullTreeData)
+
+    return treeSHA1
+  }
+
+  /// Write a Git object to the objects directory
+  private static func writeGitObject(repository: GitRepository, sha1: String, data: Data) async throws {
+    let objectDir = repository.gitPath("objects", String(sha1.prefix(2)))
+    let objectFile = objectDir.appendingPathComponent(String(sha1.dropFirst(2)))
+
+    // Create directory if needed
+    try await FileSystem.shared.createDirectory(at: FilePath(objectDir.path), withIntermediateDirectories: true)
+
+    // Compress the data using zlib
+    let compressedData = try compressData(data)
+    try compressedData.write(to: objectFile)
+  }
+
+  /// Compress data using zlib
+  private static func compressData(_ data: Data) throws -> Data {
+    return try (data as NSData).compressed(using: .zlib) as Data
+  }
+
+  /// Update HEAD to point to the new commit
+  private static func updateHEAD(repository: GitRepository, commitSHA1: String) async throws {
+    let headPath = repository.gitPath("HEAD")
+
+    // Read current HEAD to see if it's a branch or detached
+    if repository.fileExists(headPath) {
+      let headContent = try repository.readFileString(headPath).trimmingCharacters(in: .whitespacesAndNewlines)
+
+      if headContent.hasPrefix("ref: ") {
+        // Update the branch reference
+        let refPath = String(headContent.dropFirst(5))
+        let refFile = repository.gitPath(refPath)
+        try commitSHA1.write(to: refFile, atomically: true, encoding: .utf8)
+      } else {
+        // Detached HEAD, update directly
+        try commitSHA1.write(to: headPath, atomically: true, encoding: .utf8)
+      }
+    } else {
+      // No HEAD, create one pointing to the commit
+      try commitSHA1.write(to: headPath, atomically: true, encoding: .utf8)
+    }
   }
 }
 

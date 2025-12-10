@@ -11,6 +11,7 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-nio.git", branch: "main"),
     .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"5.0.0"),
     .package(url: "https://github.com/apple/swift-collections.git", branch: "main"),
+    .package(url: "https://github.com/swiftlang/swift-subprocess.git", branch: "main"),
   ],
   targets: [
     .target(
@@ -20,6 +21,11 @@ let package = Package(
         .product(name: "Crypto", package: "swift-crypto"),
         .product(name: "_NIOFileSystem", package: "swift-nio"),
       ]),
-    .testTarget(name: "SitTests", dependencies: ["Sit"]),
+    .testTarget(
+      name: "SitTests",
+      dependencies: [
+        .byName(name: "Sit"),
+        .product(name: "Subprocess", package: "swift-subprocess"),
+      ]),
   ]
 )
