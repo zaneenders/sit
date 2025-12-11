@@ -7,6 +7,8 @@ struct LZ77: ExpressibleByParsing {
   @_lifetime(&input)
   init(parsing input: inout ParserSpan) throws {
     self.header = try Header(parsing: &input)
+    let value = try UInt8(parsingLittleEndian: &input, byteCount: 1)
+    let (isBFINAL, bType) = try blockBegin(value: value)
   }
 
   struct Header {
@@ -38,6 +40,39 @@ struct LZ77: ExpressibleByParsing {
   }
 }
 
-enum LZ77Error: Error {
+func blockBegin(value: UInt8) throws -> (Bool, BType) {
+  let isBFINAL = (value & 1) == 1  // read LSB bit
+  let BTYPE = (value & 6) >> 1  // read next 2 LSB bit
+
+  let bType: BType
+  switch BTYPE {
+  case 0:
+    // 00 - no compression
+    bType = .notCompressed
+  case 1:
+    // 01 - compressed with fixed Huffman codes
+    bType = .fixedCompression
+  case 2:
+    // 10 - compressed with dynamic Huffman codes
+    bType = .dynamicCompression
+  case 3:
+    // 11 - reserved (error)
+    throw LZ77Error.blockError("reserved, error")
+  default:
+    // ERROR
+    throw LZ77Error.blockError("ERROR")
+  }
+  print(#function, isBFINAL, bType, String(value, radix: 2), String(value, radix: 16))
+  return (isBFINAL, bType)
+}
+
+enum BType {
+  case notCompressed
+  case fixedCompression
+  case dynamicCompression
+}
+
+enum LZ77Error: Error, Equatable {
   case message(String)
+  case blockError(String)
 }
