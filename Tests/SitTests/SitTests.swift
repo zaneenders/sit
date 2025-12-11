@@ -6,15 +6,17 @@ import Testing
 @Suite
 struct SitTests: ~Copyable {
   /*
-  hexdump -C "/Users/zane/.scribe/Code/sit/.git/objects/ff/517aa72881e9384c90332979fb3fe7743b2fcf" | head -20
+  hexdump -C ".git/objects/ff/517aa72881e9384c90332979fb3fe7743b2fcf" | head -20
   */
   @Test func compress() throws {
-    let a = "/Users/zane/.scribe/Code/sit/.git/objects/fe/877e3e1737e1ba0f7c1761f6c2229ca1a97d2e"
-    let b = "/Users/zane/.scribe/Code/sit/.git/objects/fe/4cce2f832572c386a4fae794c52d7645a8e4aa"
-    let c = "/Users/zane/.scribe/Code/sit/.git/objects/ff/517aa72881e9384c90332979fb3fe7743b2fcf"
+    let a = ".git/objects/fe/877e3e1737e1ba0f7c1761f6c2229ca1a97d2e"
+    let b = ".git/objects/fe/4cce2f832572c386a4fae794c52d7645a8e4aa"
+    let c = ".git/objects/ff/517aa72881e9384c90332979fb3fe7743b2fcf"
+    let d = ".git/objects/10/142352e88b8457141f6716aa1b43fc4dddfdf4"
     try inflate(a)
     try inflate(b)
     try inflate(c)
+    try inflate(d)
   }
 
   @Test func blockBegin() throws {
