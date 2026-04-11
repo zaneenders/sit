@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "sit",
+  platforms: [.macOS(.v26)],
   products: [
     .library(name: "Sit", targets: ["Sit"]),
     .executable(name: "sit", targets: ["sit-cli"]),
@@ -15,7 +16,7 @@ let package = Package(
     .target(
       name: "Sit",
       dependencies: [
-        .product(name: "Crypto", package: "swift-crypto"),
+        .product(name: "Crypto", package: "swift-crypto")
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
@@ -29,7 +30,7 @@ let package = Package(
       ],
       path: "Sources/sit-cli",
       swiftSettings: [
-        .enableExperimentalFeature("Lifetimes"),
+        .enableExperimentalFeature("Lifetimes")
       ]),
     .testTarget(
       name: "SitTests",
@@ -37,7 +38,7 @@ let package = Package(
         .byName(name: "Sit")
       ],
       swiftSettings: [
-        .enableExperimentalFeature("Lifetimes"),
+        .enableExperimentalFeature("Lifetimes")
       ]),
   ]
 )
