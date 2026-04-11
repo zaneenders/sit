@@ -29,7 +29,7 @@ swift build
 
 `push` and `pull` are thin wrappers around **`git`**: they run `git push` / `git pull` from the current directory (via `/usr/bin/env git`), inherit stdin/stdout/stderr, and pass through arguments so behavior matches stock Git. They still require a normal `.git` directory discoverable upward from the cwd, like the other `sit` commands. Use them in a **`git clone`** (or any work tree with remotes) when you want a single entry point; **`git`** must be on `PATH`.
 
-Author/committer identity (in order): optional **`--author-name`** + **`--author-email`** on `sit commit`, then `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, then Git’s usual config files merged like **`git`**: `$XDG_CONFIG_HOME/git/config` (or `~/.config/git/config`), **`~/.gitconfig`**, then **`.git/config`** in the repo (later keys override earlier ones). If nothing supplies both name and email, you’ll get a message explaining how to fix it.
+Author/committer identity (in order): optional **`--author-name`** + **`--author-email`** on `sit commit`, then `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, then Git’s usual config files merged like **`git`**: `$XDG_CONFIG_HOME/git/config` (or `~/.config/git/config`), **`~/.gitconfig`**, then **`.git/config`** in the repo (later keys override earlier ones). `HOME` and `XDG_CONFIG_HOME` follow the process environment (via `getenv`), consistent with shell `git`. If nothing supplies both name and email, you’ll get a message explaining how to fix it.
 
 Example without touching global Git config:
 
@@ -46,3 +46,25 @@ swift test
 ```
 
 Some integration tests call **`git`** and **`python3`** on `PATH` and skip if they are missing.
+
+### Code coverage
+
+Run the suite with LLVM profiling enabled, then summarize with **`llvm-cov`** (ships with the Swift toolchain):
+
+```bash
+swift test --enable-code-coverage
+
+# Linux example — adjust the `.build/<triple>/debug` prefix for your host.
+PROF=.build/x86_64-unknown-linux-gnu/debug/codecov/default.profdata
+BIN=.build/x86_64-unknown-linux-gnu/debug/sitPackageTests.xctest
+
+llvm-cov report "$BIN" -instr-profile="$PROF"
+
+# Library-only-ish view (drop tests, CLI, and generated harness noise):
+llvm-cov report "$BIN" -instr-profile="$PROF" \
+  --ignore-filename-regex='Tests/' \
+  --ignore-filename-regex='sit-cli' \
+  --ignore-filename-regex='derived'
+```
+
+HTML (optional): `llvm-cov show "$BIN" -instr-profile="$PROF" -format=html -output-dir=coverage-html` then open **`coverage-html/index.html`** in a browser.

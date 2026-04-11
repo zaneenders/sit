@@ -1,5 +1,11 @@
 public import Foundation
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 /// Reads `user.name` / `user.email` from Git config files (same layering as Git: global then repo).
 public enum GitLocalConfig: Sendable {
   public struct UserIdentity: Equatable, Sendable {
@@ -49,10 +55,13 @@ public enum GitLocalConfig: Sendable {
   }
 
   /// Same order Git uses before per-repository `config`: XDG file, then `~/.gitconfig`, then `gitDir/config`.
+  ///
+  /// Uses `getenv("HOME")` / `getenv("XDG_CONFIG_HOME")` when set so behavior matches shell `git` and tests can isolate config.
   private static func userConfigFileURLs(gitDir: URL) -> [URL] {
-    let home = FileManager.default.homeDirectoryForCurrentUser
+    let homePath = Self.getenvString("HOME").flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
+    let home = URL(fileURLWithPath: homePath, isDirectory: true).standardizedFileURL
     var urls: [URL] = []
-    if let raw = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !raw.isEmpty {
+    if let raw = Self.getenvString("XDG_CONFIG_HOME"), !raw.isEmpty {
       urls.append(URL(fileURLWithPath: raw, isDirectory: true).appendingPathComponent("git/config"))
     } else {
       urls.append(home.appendingPathComponent(".config/git/config"))
@@ -60,6 +69,13 @@ public enum GitLocalConfig: Sendable {
     urls.append(home.appendingPathComponent(".gitconfig"))
     urls.append(gitDir.appendingPathComponent("config"))
     return urls
+  }
+
+  private static func getenvString(_ key: String) -> String? {
+    key.withCString { ptr in
+      guard let raw = getenv(ptr), raw.pointee != 0 else { return nil }
+      return String(cString: raw)
+    }
   }
 
   private static func parseUserSection(in text: String) -> (name: String?, email: String?) {
