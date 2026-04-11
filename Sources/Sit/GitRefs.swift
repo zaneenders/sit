@@ -8,4 +8,15 @@ public enum GitRefs {
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data("\(sha40HexLower)\n".utf8).write(to: url)
   }
+
+  /// Reads `40` lowercase hex bytes from `refName` (e.g. `refs/heads/main`), or `nil` if missing.
+  public static func readRef(gitDir: URL, refName: String) throws -> String? {
+    let url = gitDir.appendingPathComponent(refName)
+    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    let raw = try String(contentsOf: url, encoding: .utf8)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let lower = raw.lowercased()
+    _ = try GitHex.decode20(lower)
+    return lower
+  }
 }

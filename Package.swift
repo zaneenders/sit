@@ -4,10 +4,12 @@ import PackageDescription
 let package = Package(
   name: "sit",
   products: [
-    .library(name: "Sit", targets: ["Sit"])
+    .library(name: "Sit", targets: ["Sit"]),
+    .executable(name: "sit", targets: ["sit-cli"]),
   ],
   dependencies: [
     .package(url: "https://github.com/apple/swift-crypto.git", from: "3.8.0"),
+    .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
   ],
   targets: [
     .target(
@@ -18,6 +20,16 @@ let package = Package(
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
         .enableExperimentalFeature("InternalImportsByDefault"),
+      ]),
+    .executableTarget(
+      name: "sit-cli",
+      dependencies: [
+        .target(name: "Sit"),
+        .product(name: "ArgumentParser", package: "swift-argument-parser"),
+      ],
+      path: "Sources/sit-cli",
+      swiftSettings: [
+        .enableExperimentalFeature("Lifetimes"),
       ]),
     .testTarget(
       name: "SitTests",

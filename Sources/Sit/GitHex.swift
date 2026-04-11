@@ -1,5 +1,5 @@
-enum GitHex {
-  static func encodeLower(_ sha20: [UInt8]) -> String {
+public enum GitHex: Sendable {
+  public static func encodeLower(_ sha20: [UInt8]) -> String {
     precondition(sha20.count == 20)
     let table = Array("0123456789abcdef".utf8)
     var out = [UInt8]()
@@ -11,7 +11,7 @@ enum GitHex {
     return String(decoding: out, as: UTF8.self)
   }
 
-  static func decode20(_ hex40: String) throws -> [UInt8] {
+  public static func decode20(_ hex40: String) throws -> [UInt8] {
     guard hex40.count == 40 else { throw GitObjectWriterError.badHexSha }
     var out: [UInt8] = []
     out.reserveCapacity(20)
