@@ -1,10 +1,11 @@
 public import Foundation
 
 public enum GitWorkTreeScan: Sendable {
-  /// All regular files under `workTree`, as repo-relative `/`-separated paths (excludes anything under `.git`).
-  public static func allRelativeFilePaths(workTree: URL) throws -> Set<String> {
+  /// All regular files under `workTree`, as repo-relative `/`-separated paths (excludes `.git/` and paths matched by ``GitIgnoreMatcher``).
+  public static func allRelativeFilePaths(workTree: URL, gitDir: URL) throws -> Set<String> {
     let fm = FileManager.default
     let wt = workTree.standardizedFileURL
+    let ignore = try GitIgnoreMatcher(workTree: wt, gitDir: gitDir.standardizedFileURL)
     let dotGitDir = wt.appendingPathComponent(".git", isDirectory: true).standardizedFileURL
     let dotGitPath = dotGitDir.path
     let dotGitPrefix = dotGitPath + "/"
@@ -21,7 +22,9 @@ public enum GitWorkTreeScan: Sendable {
       if p == dotGitPath || p.hasPrefix(dotGitPrefix) { continue }
       var isDir: ObjCBool = false
       guard fm.fileExists(atPath: item.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-      out.insert(try relativePath(file: item.standardizedFileURL, workTree: wt))
+      let rel = try relativePath(file: item.standardizedFileURL, workTree: wt)
+      if ignore.isIgnored(relativePath: rel, isDirectory: false) { continue }
+      out.insert(rel)
     }
     return out
   }
@@ -32,7 +35,7 @@ public enum GitWorkTreeScan: Sendable {
     return relativePaths.sorted().map { URL(fileURLWithPath: prefix + $0, isDirectory: false).standardizedFileURL }
   }
 
-  private static func relativePath(file: URL, workTree: URL) throws -> String {
+  public static func relativePath(file: URL, workTree: URL) throws -> String {
     let f = file.standardizedFileURL.path
     let w = workTree.standardizedFileURL.path
     let prefix = w.hasSuffix("/") ? w : w + "/"

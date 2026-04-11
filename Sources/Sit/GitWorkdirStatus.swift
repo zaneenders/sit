@@ -71,7 +71,7 @@ public enum GitWorkdirStatusText: Sendable {
     }
     let indexMap = index.pathToBlobSha
     let headMap = try headBlobMap(gitDir: gitDir, packs: packs)
-    let diskPaths = try GitWorkTreeScan.allRelativeFilePaths(workTree: workTree)
+    let diskPaths = try GitWorkTreeScan.allRelativeFilePaths(workTree: workTree, gitDir: gitDir)
 
     var stagedMod: [String] = []
     var stagedAdd: [String] = []

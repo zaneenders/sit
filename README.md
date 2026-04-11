@@ -9,10 +9,11 @@ Requires **Swift 6.3** or newer (see `Package.swift`).
 Rough split:
 
 - **Read:** pack index v2, pack objects (including deltas), zlib loose objects, DEFLATE inflate, binary deltas, loose blobs.
+- **Ignore rules:** `.git/info/exclude` and every `.gitignore` under the work tree (excluding `.git/`), applied to **`sit status`** / work-tree scans and **`sit add`** with Git-style last-match wins (`!` negation, `*`, `?`, `**`, leading `/`, trailing `/`). Not wired to `core.excludesfile` or every `gitignore` edge case.
 - **Write:** `git init`-style layout (templates + `HEAD`/`config`), zlib loose blobs/trees/commits, ref updates, index staging, commits from the index.
 - **Crypto:** SHA-1 object ids via [swift-crypto](https://github.com/apple/swift-crypto).
 
-Not a full Git replacement: no pack *writer*, no index v4, no SHA-256 repos, no signing/merges/tags, and the index path story is “regular files, Git-compatible v2/v3” rather than every `git status` edge case.
+Not a full Git replacement: no pack *writer*, no index v4, no SHA-256 repos, no signing/merges/tags, ignore handling is a practical subset (see above), and the index path story is “regular files, Git-compatible v2/v3” rather than every `git status` edge case.
 
 ## CLI (`sit`)
 

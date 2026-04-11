@@ -84,7 +84,7 @@ struct SitAdd: ParsableCommand {
       guard paths.isEmpty else {
         throw ValidationError("Do not pass paths together with --all / -A.")
       }
-      let onDisk = try GitWorkTreeScan.allRelativeFilePaths(workTree: workTree)
+      let onDisk = try GitWorkTreeScan.allRelativeFilePaths(workTree: workTree, gitDir: gitDir)
       for path in index.trackedPaths where !onDisk.contains(path) {
         index.removeEntry(path: path)
       }
@@ -97,7 +97,7 @@ struct SitAdd: ParsableCommand {
       guard !paths.isEmpty else {
         throw ValidationError("Pass at least one path, or use --all / -A.")
       }
-      let files = try Self.expandPaths(cwd: cwd, userPaths: paths)
+      let files = try Self.expandPaths(cwd: cwd, workTree: workTree, gitDir: gitDir, userPaths: paths)
       guard !files.isEmpty else {
         throw ValidationError("No regular files found to stage.")
       }
@@ -106,8 +106,9 @@ struct SitAdd: ParsableCommand {
     try index.write(to: indexURL)
   }
 
-  private static func expandPaths(cwd: URL, userPaths: [String]) throws -> [URL] {
+  private static func expandPaths(cwd: URL, workTree: URL, gitDir: URL, userPaths: [String]) throws -> [URL] {
     let fm = FileManager.default
+    let matcher = try GitIgnoreMatcher(workTree: workTree, gitDir: gitDir)
     var collected: [URL] = []
     for s in userPaths {
       let u = resolveURL(cwd: cwd, s)
@@ -131,9 +132,20 @@ struct SitAdd: ParsableCommand {
           if p == dotGitPath || p.hasPrefix(dotGitPrefix) { continue }
           var reg: ObjCBool = false
           guard fm.fileExists(atPath: item.path, isDirectory: &reg), !reg.boolValue else { continue }
-          collected.append(item.standardizedFileURL)
+          let fileURL = item.standardizedFileURL
+          if let rel = try? GitWorkTreeScan.relativePath(file: fileURL, workTree: workTree),
+            matcher.isIgnored(relativePath: rel, isDirectory: false)
+          {
+            continue
+          }
+          collected.append(fileURL)
         }
       } else {
+        if let rel = try? GitWorkTreeScan.relativePath(file: u, workTree: workTree),
+          matcher.isIgnored(relativePath: rel, isDirectory: false)
+        {
+          continue
+        }
         collected.append(u)
       }
     }
