@@ -5,7 +5,56 @@ import Testing
 
 @Suite
 struct SitTests: ~Copyable {
-  /// `python3 -c "import zlib; ... blob 5\\x00hello"` — full zlib + Adler32.
+  @Test func deflateStoredRoundTripsViaSitInflate() throws {
+    let plain = Array("hello world".utf8)
+    let deflated = try DeflateCompress.compressStored(plain)
+    let got = try DeflateInflate.inflate(deflated)
+    #expect(Array(got) == plain)
+  }
+
+  @Test func deflateStoredEmptyRoundTrips() throws {
+    let deflated = try DeflateCompress.compressStored([])
+    let got = try DeflateInflate.inflate(deflated)
+    #expect(got.isEmpty)
+  }
+
+  @Test func deflateStoredSpansMultipleBlocks() throws {
+    let plain = [UInt8](repeating: 0xab, count: 70_000)
+    let deflated = try DeflateCompress.compressStored(plain)
+    let got = try DeflateInflate.inflate(deflated)
+    #expect(Array(got) == plain)
+  }
+
+  @Test func zlibCompressDecompressRoundTripSitOnly() throws {
+    let plain = Array("blob 5\0hello".utf8)
+    let zlib = try ZlibLooseObject.compress(plain)
+    let back = try ZlibLooseObject.decompress(Array(zlib))
+    #expect(Array(back) == plain)
+  }
+
+  /// Sit’s pure-Swift zlib → Python’s `zlib.decompress` must match `.git` bytes.
+  @Test func dogfoodSwiftZlibDecompressedByPythonMatchesGitBlob() throws {
+    guard Self.python3Path() != nil else {
+      Issue.record("skip dogfood: python3 not found on PATH")
+      return
+    }
+    let packageRoot = Self.packageRoot()
+    guard let sha = Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
+      let fileBytes = Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
+    else {
+      Issue.record("skip dogfood: git rev-parse / cat-file failed (not a git checkout?)")
+      return
+    }
+    let header = Data("blob \(fileBytes.count)\0".utf8)
+    let rawObject = header + fileBytes
+    let swiftZlib = try ZlibLooseObject.compress([UInt8](rawObject))
+    guard let pyPlain = Self.zlibDecompressViaPython(Data(swiftZlib)) else {
+      Issue.record("skip dogfood: zlib.decompress via python3 failed")
+      return
+    }
+    #expect(pyPlain == rawObject)
+  }
+
   @Test func zlibDecompressesSyntheticLooseObject() throws {
     let zlibBlob: [UInt8] = [
       0x78, 0x9c, 0x4b, 0xca, 0xc9, 0x4f, 0x52, 0x30, 0x65,
@@ -134,6 +183,32 @@ struct SitTests: ~Copyable {
       return p
     }
     return nil
+  }
+
+  private static func zlibDecompressViaPython(_ data: Data) -> Data? {
+    guard let py = python3Path() else { return nil }
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: py)
+    proc.arguments = [
+      "-c",
+      "import zlib,sys; sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))",
+    ]
+    let stdin = Pipe()
+    let stdout = Pipe()
+    proc.standardInput = stdin
+    proc.standardOutput = stdout
+    proc.standardError = Pipe()
+    do {
+      try proc.run()
+      try stdin.fileHandleForWriting.write(contentsOf: data)
+      try stdin.fileHandleForWriting.close()
+      let out = try stdout.fileHandleForReading.readToEnd() ?? Data()
+      proc.waitUntilExit()
+      guard proc.terminationStatus == 0 else { return nil }
+      return out
+    } catch {
+      return nil
+    }
   }
 
   private static func zlibCompressViaPython(_ data: Data) -> Data? {
