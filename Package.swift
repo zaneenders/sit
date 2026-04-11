@@ -6,10 +6,15 @@ let package = Package(
   products: [
     .library(name: "Sit", targets: ["Sit"])
   ],
+  dependencies: [
+    .package(url: "https://github.com/apple/swift-crypto.git", from: "3.8.0"),
+  ],
   targets: [
     .target(
       name: "Sit",
-      dependencies: [],
+      dependencies: [
+        .product(name: "Crypto", package: "swift-crypto"),
+      ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
         .enableExperimentalFeature("InternalImportsByDefault"),
