@@ -32,12 +32,76 @@ struct SitTests: ~Copyable {
     #expect(Array(back) == plain)
   }
 
-  /// Sit’s pure-Swift zlib → Python’s `zlib.decompress` must match `.git` bytes.
-  @Test func dogfoodSwiftZlibDecompressedByPythonMatchesGitBlob() throws {
-    guard Self.python3Path() != nil else {
-      Issue.record("skip dogfood: python3 not found on PATH")
+  /// Every object reachable from **any ref** (`rev-list --objects --all`): raw
+  /// `git cat-file` bytes round-trip through Sit’s zlib compress + decompress (no Python).
+  @Test func dogfoodAllReachableObjectsZlibSitRoundTrip() throws {
+    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
+    let shas = GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
+    guard !shas.isEmpty else {
+      Issue.record("skip dogfood: no SHAs from git rev-list (not a git checkout?)")
       return
     }
+    guard let batch = GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
+      Issue.record("skip dogfood: git cat-file --batch failed")
+      return
+    }
+    let allowed = Set(["blob", "tree", "commit", "tag"])
+    for (_, type, raw) in batch {
+      guard allowed.contains(type) else { continue }
+      let z = try ZlibLooseObject.compress([UInt8](raw))
+      let back = try ZlibLooseObject.decompress(Array(z))
+      #expect(back.elementsEqual(raw))
+    }
+  }
+
+  /// Same all-refs reachable set: Sit zlib must decompress under Python’s `zlib`.
+  @Test func dogfoodAllReachableObjectsZlibPythonDecompress() throws {
+    try GitDogfoodHelpers.requirePython3ForDogfood()
+    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
+    let shas = GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
+    guard !shas.isEmpty else {
+      Issue.record("skip dogfood: no SHAs from git rev-list")
+      return
+    }
+    guard let batch = GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
+      Issue.record("skip dogfood: git cat-file --batch failed")
+      return
+    }
+    let allowed = Set(["blob", "tree", "commit", "tag"])
+    for (_, type, raw) in batch {
+      guard allowed.contains(type) else { continue }
+      let swiftZlib = try ZlibLooseObject.compress([UInt8](raw))
+      let pyPlain = try GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
+      #expect(pyPlain == raw)
+    }
+  }
+
+  /// Every `blob` at `HEAD` as a synthetic loose object (`blob <n>\\0` + payload).
+  @Test func dogfoodEveryHeadTreeBlobAsLooseObjectZlibPython() throws {
+    try GitDogfoodHelpers.requirePython3ForDogfood()
+    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
+    let rows = GitDogfoodHelpers.gitLsTreeRecursive(packageRoot: root)
+    guard !rows.isEmpty else {
+      Issue.record("skip dogfood: git ls-tree empty (not a git checkout?)")
+      return
+    }
+    for (_, type, sha, _) in rows where type == "blob" {
+      guard let body = GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: "blob", sha: sha) else {
+        Issue.record("skip dogfood: git cat-file blob failed for \(sha)")
+        return
+      }
+      var raw = Data()
+      raw.append(contentsOf: "blob \(body.count)\0".utf8)
+      raw.append(body)
+      let swiftZlib = try ZlibLooseObject.compress([UInt8](raw))
+      let pyPlain = try GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
+      #expect(pyPlain == raw)
+    }
+  }
+
+  /// Sit’s pure-Swift zlib → Python’s `zlib.decompress` must match `.git` bytes.
+  @Test func dogfoodSwiftZlibDecompressedByPythonMatchesGitBlob() throws {
+    try GitDogfoodHelpers.requirePython3ForDogfood()
     let packageRoot = Self.packageRoot()
     guard let sha = Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
       let fileBytes = Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
@@ -48,10 +112,7 @@ struct SitTests: ~Copyable {
     let header = Data("blob \(fileBytes.count)\0".utf8)
     let rawObject = header + fileBytes
     let swiftZlib = try ZlibLooseObject.compress([UInt8](rawObject))
-    guard let pyPlain = Self.zlibDecompressViaPython(Data(swiftZlib)) else {
-      Issue.record("skip dogfood: zlib.decompress via python3 failed")
-      return
-    }
+    let pyPlain = try GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
     #expect(pyPlain == rawObject)
   }
 
@@ -81,10 +142,7 @@ struct SitTests: ~Copyable {
   /// Build a real `blob <n>\\0` + `Package.swift` bytes, zlib-compress with
   /// Python, then inflate + parse purely in Sit — tight loop against this repo.
   @Test func dogfoodPackageSwiftAsGitBlobRoundTrip() throws {
-    guard Self.python3Path() != nil else {
-      Issue.record("skip dogfood: python3 not found on PATH")
-      return
-    }
+    try GitDogfoodHelpers.requirePython3ForDogfood()
     let packageRoot = Self.packageRoot()
     let packageSwift = packageRoot.appendingPathComponent("Package.swift")
     guard FileManager.default.fileExists(atPath: packageSwift.path) else {
@@ -95,10 +153,7 @@ struct SitTests: ~Copyable {
     let header = Data("blob \(fileData.count)\0".utf8)
     let rawObject = header + fileData
 
-    guard let zlibData = Self.zlibCompressViaPython(rawObject) else {
-      Issue.record("skip dogfood: zlib.compress via python3 failed")
-      return
-    }
+    let zlibData = try GitDogfoodHelpers.zlibCompressViaPythonRequired(rawObject)
 
     let inflated = try ZlibLooseObject.decompress([UInt8](zlibData))
     #expect(inflated.elementsEqual(rawObject))
@@ -110,10 +165,7 @@ struct SitTests: ~Copyable {
   /// `git cat-file blob <sha>` (file bytes) plus a synthetic `blob <n>\\0` header
   /// round-trips through Python’s zlib and Sit’s inflater.
   @Test func dogfoodMatchesGitCatFileBlob() throws {
-    guard Self.python3Path() != nil else {
-      Issue.record("skip dogfood: python3 not found on PATH")
-      return
-    }
+    try GitDogfoodHelpers.requirePython3ForDogfood()
     let packageRoot = Self.packageRoot()
     guard let sha = Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
       let fileBytes = Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
@@ -123,10 +175,7 @@ struct SitTests: ~Copyable {
     }
     let header = Data("blob \(fileBytes.count)\0".utf8)
     let rawObject = header + fileBytes
-    guard let zlibData = Self.zlibCompressViaPython(rawObject) else {
-      Issue.record("skip dogfood: zlib.compress via python3 failed")
-      return
-    }
+    let zlibData = try GitDogfoodHelpers.zlibCompressViaPythonRequired(rawObject)
     let inflated = try ZlibLooseObject.decompress([UInt8](zlibData))
     #expect(inflated.elementsEqual(rawObject))
   }
@@ -175,66 +224,6 @@ struct SitTests: ~Copyable {
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-  }
-
-  private static func python3Path() -> String? {
-    let paths = ["/usr/bin/python3", "/usr/local/bin/python3", "/bin/python3"]
-    for p in paths where FileManager.default.isExecutableFile(atPath: p) {
-      return p
-    }
-    return nil
-  }
-
-  private static func zlibDecompressViaPython(_ data: Data) -> Data? {
-    guard let py = python3Path() else { return nil }
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: py)
-    proc.arguments = [
-      "-c",
-      "import zlib,sys; sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))",
-    ]
-    let stdin = Pipe()
-    let stdout = Pipe()
-    proc.standardInput = stdin
-    proc.standardOutput = stdout
-    proc.standardError = Pipe()
-    do {
-      try proc.run()
-      try stdin.fileHandleForWriting.write(contentsOf: data)
-      try stdin.fileHandleForWriting.close()
-      let out = try stdout.fileHandleForReading.readToEnd() ?? Data()
-      proc.waitUntilExit()
-      guard proc.terminationStatus == 0 else { return nil }
-      return out
-    } catch {
-      return nil
-    }
-  }
-
-  private static func zlibCompressViaPython(_ data: Data) -> Data? {
-    guard let py = python3Path() else { return nil }
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: py)
-    proc.arguments = [
-      "-c",
-      "import zlib,sys; sys.stdout.buffer.write(zlib.compress(sys.stdin.buffer.read()))",
-    ]
-    let stdin = Pipe()
-    let stdout = Pipe()
-    proc.standardInput = stdin
-    proc.standardOutput = stdout
-    proc.standardError = Pipe()
-    do {
-      try proc.run()
-      try stdin.fileHandleForWriting.write(contentsOf: data)
-      try stdin.fileHandleForWriting.close()
-      let out = try stdout.fileHandleForReading.readToEnd() ?? Data()
-      proc.waitUntilExit()
-      guard proc.terminationStatus == 0, !out.isEmpty else { return nil }
-      return out
-    } catch {
-      return nil
-    }
   }
 
   private static func gitRevParse(packageRoot: URL, rev: String) -> String? {

@@ -24,7 +24,7 @@ struct PackObjectReadingTests: ~Copyable {
     let got = try git.serializedObject(sha20: sha)
     let want = try Self.gitCatFile(
       packageRoot: Self.packageRoot(),
-      args: ["cat-file", "-p", "aed4b92c79f9142fdf2aeb920e7105302d14e9af"]
+      args: ["cat-file", "commit", "aed4b92c79f9142fdf2aeb920e7105302d14e9af"]
     )
     #expect(Array(got) == want)
   }
@@ -51,6 +51,41 @@ struct PackObjectReadingTests: ~Copyable {
       args: ["cat-file", "tree", "1695d68b7d4da126abca17c308ef3729ecf5e6d3"]
     )
     #expect(Array(got) == want)
+  }
+
+  /// Every object reachable with `rev-list --objects --all` that appears in the
+  /// fixture `.idx` must match `git cat-file <type> <sha>` (Sit’s pack decoder).
+  @Test func readsEveryIndexedReachableObjectInSitPackMatchesGitCatFile() throws {
+    let root = Self.packageRoot()
+    let shas = GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
+    guard !shas.isEmpty else {
+      Issue.record("skip: git rev-list --objects --all produced no SHAs")
+      return
+    }
+    guard let batch = GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
+      Issue.record("skip: git cat-file --batch failed")
+      return
+    }
+    let (pack, idx) = try Self.loadSitPack()
+    let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
+    let allowed: Set<String> = ["blob", "tree", "commit", "tag"]
+    var matched = 0
+    for (sha, type, _) in batch {
+      guard allowed.contains(type) else { continue }
+      guard let shaBytes = GitDogfoodHelpers.sha20(fromHex40: sha) else { continue }
+      guard gitPack.index.offset(for: shaBytes) != nil else { continue }
+      let got = try gitPack.serializedObject(sha20: shaBytes)
+      guard let want = GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: type, sha: sha) else {
+        Issue.record("skip: git cat-file \(type) \(sha) failed")
+        return
+      }
+      #expect(Array(got) == Array(want))
+      matched += 1
+    }
+    guard matched > 0 else {
+      Issue.record("skip: no rev-list --all objects from this repo appear in pack-58dfe777… idx")
+      return
+    }
   }
 
   private static func packageRoot() -> URL {
