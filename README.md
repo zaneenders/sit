@@ -20,9 +20,9 @@ Build from the package root, then run inside a normal clone or `git init` work t
 
 ```bash
 swift build
-.build/debug/sit add <paths…>      # files or directories (skips `.git`)
+.build/debug/sit add <paths…>      # files or directories (skips `.git/` only; dotfiles like `.gitignore` are included)
 .build/debug/sit commit -m "msg"   # tree from index → commit → update HEAD
-.build/debug/sit status            # simplified git status
+.build/debug/sit status            # simplified git status (includes untracked dotfiles)
 .build/debug/sit push [args…]      # runs git push (same flags, e.g. -u origin main)
 .build/debug/sit pull [args…]      # runs git pull
 ```

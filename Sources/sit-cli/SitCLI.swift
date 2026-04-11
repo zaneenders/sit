@@ -116,15 +116,19 @@ struct SitAdd: ParsableCommand {
         throw ValidationError("Path not found: \(s)")
       }
       if isDir.boolValue {
+        let dotGitDir = u.appendingPathComponent(".git", isDirectory: true).standardizedFileURL
+        let dotGitPath = dotGitDir.path
+        let dotGitPrefix = dotGitPath + "/"
         guard
           let en = fm.enumerator(
             at: u,
             includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
+            options: []
           )
         else { continue }
         while let item = en.nextObject() as? URL {
-          if item.path.split(separator: "/").contains(".git") { continue }
+          let p = item.standardizedFileURL.path
+          if p == dotGitPath || p.hasPrefix(dotGitPrefix) { continue }
           var reg: ObjCBool = false
           guard fm.fileExists(atPath: item.path, isDirectory: &reg), !reg.boolValue else { continue }
           collected.append(item.standardizedFileURL)

@@ -32,6 +32,34 @@ struct GitWorkdirStatusTextTests: ~Copyable {
     }
   }
 
+  @Test func hasUnstagedWorktreeChangesTrueWhenUntrackedDotfile() throws {
+    let templates = try GitInit.discoverTemplateDirectory()
+    try TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("w", isDirectory: true)
+      try GitInit.createEmptyRepository(workTree: work, initialBranch: "main", templateDirectory: templates)
+      let gitDir = work.appendingPathComponent(".git", isDirectory: true)
+      try Self.appendUserConfig(gitDir: gitDir)
+      let tracked = work.appendingPathComponent("tracked.txt")
+      try Data("x\n".utf8).write(to: tracked)
+      var index = GitIndex()
+      try index.stage(gitDir: gitDir, workTree: work, files: [tracked])
+      try index.write(to: gitDir.appendingPathComponent("index"))
+      let author = GitLocalConfig.UserIdentity(name: "sit", email: "sit@test")
+      _ = try GitStaging.commit(
+        gitDir: gitDir,
+        workTree: work,
+        message: "first",
+        author: author,
+        committer: author
+      )
+      try Data("#\n".utf8).write(to: work.appendingPathComponent(".gitignore"))
+      let dirty = try GitWorkdirStatusText.hasUnstagedWorktreeChanges(gitDir: gitDir, workTree: work)
+      #expect(dirty)
+      let text = try GitWorkdirStatusText.format(gitDir: gitDir, workTree: work)
+      #expect(text.contains(".gitignore"))
+    }
+  }
+
   @Test func hasUnstagedWorktreeChangesTrueWhenUntrackedFile() throws {
     let templates = try GitInit.discoverTemplateDirectory()
     try TempDirectory.withRemoval { root in

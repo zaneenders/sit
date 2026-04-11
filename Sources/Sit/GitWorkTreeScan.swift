@@ -5,16 +5,20 @@ public enum GitWorkTreeScan: Sendable {
   public static func allRelativeFilePaths(workTree: URL) throws -> Set<String> {
     let fm = FileManager.default
     let wt = workTree.standardizedFileURL
+    let dotGitDir = wt.appendingPathComponent(".git", isDirectory: true).standardizedFileURL
+    let dotGitPath = dotGitDir.path
+    let dotGitPrefix = dotGitPath + "/"
     guard
       let en = fm.enumerator(
         at: wt,
         includingPropertiesForKeys: [.isRegularFileKey],
-        options: [.skipsHiddenFiles]
+        options: []
       )
     else { return [] }
     var out = Set<String>()
     while let item = en.nextObject() as? URL {
-      if item.path.split(separator: "/").contains(".git") { continue }
+      let p = item.standardizedFileURL.path
+      if p == dotGitPath || p.hasPrefix(dotGitPrefix) { continue }
       var isDir: ObjCBool = false
       guard fm.fileExists(atPath: item.path, isDirectory: &isDir), !isDir.boolValue else { continue }
       out.insert(try relativePath(file: item.standardizedFileURL, workTree: wt))
