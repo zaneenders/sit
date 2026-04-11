@@ -80,6 +80,37 @@ struct SitCLIProcessTests: ~Copyable {
     }
   }
 
+  /// `sit push` / `sit pull` delegate to `git` with the same exit status (no remote in a fresh repo).
+  @Test func sitPushAndPullMatchGitExitCodes() throws {
+    guard let git = Self.gitPath() else {
+      Issue.record("skip: git not found on PATH")
+      return
+    }
+    guard let sit = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+      let (initCode, _, errInit) = try Self.runProcess(
+        executable: sit, cwd: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0, "sit init: \(errInit)")
+      let gitURL = URL(fileURLWithPath: git)
+      let (codeSitPush, _, _) = try Self.runProcess(executable: sit, cwd: work, arguments: ["push"])
+      let (codeGitPush, _, _) = try Self.runProcess(executable: gitURL, cwd: work, arguments: ["push"])
+      #expect(codeSitPush == codeGitPush)
+      let (codeSitPull, _, _) = try Self.runProcess(executable: sit, cwd: work, arguments: ["pull"])
+      let (codeGitPull, _, _) = try Self.runProcess(executable: gitURL, cwd: work, arguments: ["pull"])
+      #expect(codeSitPull == codeGitPull)
+      let (codeSitPushArg, _, _) = try Self.runProcess(
+        executable: sit, cwd: work, arguments: ["push", "--dry-run", "nope", "main"])
+      let (codeGitPushArg, _, _) = try Self.runProcess(
+        executable: gitURL, cwd: work, arguments: ["push", "--dry-run", "nope", "main"])
+      #expect(codeSitPushArg == codeGitPushArg)
+    }
+  }
+
   private static func packageRootURL() -> URL? {
     let fm = FileManager.default
     var dir = URL(fileURLWithPath: #filePath, isDirectory: false).deletingLastPathComponent()

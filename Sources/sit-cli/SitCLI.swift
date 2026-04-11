@@ -7,7 +7,9 @@ struct SitCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "sit",
     abstract: "Initialize a repo, stage files, show status, and create commits in a Git-compatible layout.",
-    subcommands: [SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self]
+    subcommands: [
+      SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self, SitPush.self, SitPull.self,
+    ]
   )
 }
 
@@ -204,5 +206,49 @@ struct SitStatus: ParsableCommand {
     let (gitDir, workTree) = try GitRepository.discover(from: cwd)
     let text = try GitWorkdirStatusText.format(gitDir: gitDir, workTree: workTree)
     print(text, terminator: "")
+  }
+}
+
+/// Run `git <subcommand>` with extra args; inherits stdin/stdout/stderr like running git directly.
+private enum SitGitPassthrough {
+  static func run(subcommand: String, gitArguments: [String]) throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    _ = try GitRepository.discover(from: cwd)
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    p.arguments = ["git", subcommand] + gitArguments
+    p.currentDirectoryURL = cwd
+    try p.run()
+    p.waitUntilExit()
+    let status = p.terminationStatus
+    guard status == 0 else { throw ExitCode(status) }
+  }
+}
+
+struct SitPush: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "push",
+    abstract: "Run git push (Sit does not implement network transfer; use in normal clones)."
+  )
+
+  @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git push.")
+  var gitArguments: [String] = []
+
+  mutating func run() throws {
+    try SitGitPassthrough.run(subcommand: "push", gitArguments: gitArguments)
+  }
+}
+
+struct SitPull: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "pull",
+    abstract: "Run git pull (Sit does not implement network transfer; use in normal clones)."
+  )
+
+  @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git pull.")
+  var gitArguments: [String] = []
+
+  mutating func run() throws {
+    try SitGitPassthrough.run(subcommand: "pull", gitArguments: gitArguments)
   }
 }
