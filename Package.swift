@@ -35,7 +35,8 @@ let package = Package(
     .testTarget(
       name: "SitTests",
       dependencies: [
-        .byName(name: "Sit")
+        .byName(name: "Sit"),
+        .target(name: "sit-cli"),
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes")

@@ -6,9 +6,53 @@ import Sit
 struct SitCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "sit",
-    abstract: "Stage files and create commits in a compatible Git repository.",
-    subcommands: [SitAdd.self, SitCommit.self]
+    abstract: "Initialize a repo, stage files, show status, and create commits in a Git-compatible layout.",
+    subcommands: [SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self]
   )
+}
+
+struct SitInit: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "init",
+    abstract: "Create an empty Git repository in the given directory (or the current directory)."
+  )
+
+  @Option(
+    name: [.customShort("b"), .customLong("initial-branch")],
+    help: "Initial branch name (like git init -b)."
+  )
+  var initialBranch: String = "main"
+
+  @Argument(help: "Directory for the new repository; default is the current directory.")
+  var directory: String?
+
+  mutating func run() throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let branch = initialBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !branch.isEmpty else {
+      throw ValidationError("Initial branch name must not be empty.")
+    }
+    let workTree: URL
+    if let d = directory?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty {
+      workTree =
+        d.hasPrefix("/")
+        ? URL(fileURLWithPath: d, isDirectory: true).standardizedFileURL
+        : cwd.appendingPathComponent(d, isDirectory: true).standardizedFileURL
+    } else {
+      workTree = cwd
+    }
+    do {
+      try GitInit.createEmptyRepository(workTree: workTree, initialBranch: branch, templateDirectory: nil)
+    } catch GitInitError.gitDirectoryAlreadyExists {
+      throw ValidationError("A .git directory already exists at \(workTree.path).")
+    } catch GitInitError.templateDirectoryNotFound {
+      throw ValidationError(
+        "Git template directory not found. Set GIT_TEMPLATE_DIR, or install git’s share/git-core/templates."
+      )
+    } catch GitInitError.fileSystemError(let message) {
+      throw ValidationError(message)
+    }
+  }
 }
 
 struct SitAdd: ParsableCommand {
@@ -17,13 +61,13 @@ struct SitAdd: ParsableCommand {
     abstract: "Stage file contents (writes blobs and updates the index)."
   )
 
-  @Argument(help: "Files or directories to stage.")
-  var paths: [String]
+  @Flag(name: [.customShort("A"), .customLong("all")], help: "Stage the whole work tree (like git add --all); remove index entries for deleted files.")
+  var all = false
+
+  @Argument(help: "Files or directories to stage (omit when using --all / -A).")
+  var paths: [String] = []
 
   mutating func run() throws {
-    guard !paths.isEmpty else {
-      throw ValidationError("Pass at least one path (file or directory).")
-    }
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     let (gitDir, workTree) = try GitRepository.discover(from: cwd)
     let indexURL = gitDir.appendingPathComponent("index")
@@ -33,11 +77,30 @@ struct SitAdd: ParsableCommand {
     } else {
       index = GitIndex()
     }
-    let files = try Self.expandPaths(cwd: cwd, userPaths: paths)
-    guard !files.isEmpty else {
-      throw ValidationError("No regular files found to stage.")
+
+    if all {
+      guard paths.isEmpty else {
+        throw ValidationError("Do not pass paths together with --all / -A.")
+      }
+      let onDisk = try GitWorkTreeScan.allRelativeFilePaths(workTree: workTree)
+      for path in index.trackedPaths where !onDisk.contains(path) {
+        index.removeEntry(path: path)
+      }
+      let urls = GitWorkTreeScan.fileURLs(workTree: workTree, relativePaths: onDisk)
+      guard !urls.isEmpty else {
+        throw ValidationError("No files found under the work tree.")
+      }
+      try index.stage(gitDir: gitDir, workTree: workTree, files: urls)
+    } else {
+      guard !paths.isEmpty else {
+        throw ValidationError("Pass at least one path, or use --all / -A.")
+      }
+      let files = try Self.expandPaths(cwd: cwd, userPaths: paths)
+      guard !files.isEmpty else {
+        throw ValidationError("No regular files found to stage.")
+      }
+      try index.stage(gitDir: gitDir, workTree: workTree, files: files)
     }
-    try index.stage(gitDir: gitDir, workTree: workTree, files: files)
     try index.write(to: indexURL)
   }
 
@@ -127,5 +190,19 @@ struct SitCommit: ParsableCommand {
       committer: committer
     )
     print(hex)
+  }
+}
+
+struct SitStatus: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "status",
+    abstract: "Show staged, unstaged, and untracked changes (simplified git status)."
+  )
+
+  mutating func run() throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
+    let text = try GitWorkdirStatusText.format(gitDir: gitDir, workTree: workTree)
+    print(text, terminator: "")
   }
 }

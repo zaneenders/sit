@@ -2,6 +2,18 @@ public import Foundation
 
 /// Write zlib-compressed loose objects under `.git/objects/` (SHA-1, RFC 1950 zlib).
 public enum GitLooseObjectWriter {
+  /// SHA-1 of the canonical loose `blob` object for `content` (no zlib, no disk I/O).
+  public static func blobSha1(content: [UInt8]) -> [UInt8] {
+    var header: [UInt8] = []
+    header.append(contentsOf: "blob".utf8)
+    header.append(UInt8(ascii: " "))
+    header.append(contentsOf: String(content.count).utf8)
+    header.append(0)
+    var storage = header
+    storage.append(contentsOf: content)
+    return GitSHA1.digest(of: storage)
+  }
+
   public static func writeBlob(gitDir: URL, content: [UInt8]) throws -> [UInt8] {
     try writeObject(gitDir: gitDir, type: "blob", body: content)
   }

@@ -31,6 +31,24 @@ public struct GitPack: Sendable {
     )
   }
 
+  /// Pack object type (`1` commit, `2` tree, `3` blob, `4` tag) and uncompressed payload (no loose-style header).
+  public func objectTypeAndPayload(sha20: [UInt8]) throws -> (type: Int, payload: ContiguousArray<UInt8>) {
+    guard let off32 = index.offset(for: sha20) else {
+      throw GitPackError.shaNotFoundInIndex
+    }
+    var pos = Int(off32)
+    let (type, _) = try Self.readPackObjectHeader(packData, pos: &pos)
+    var memo: [Int: ContiguousArray<UInt8>] = [:]
+    let payload = try Self.decodeObject(
+      pack: packData,
+      index: index,
+      at: Int(off32),
+      memo: &memo,
+      depth: 0
+    )
+    return (type, payload)
+  }
+
   // MARK: - Pack file
 
   private static func readPackFileHeader(_ pack: [UInt8]) throws -> UInt32 {

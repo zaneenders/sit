@@ -37,6 +37,18 @@ public struct GitIndex: Sendable {
 
   public var isEmpty: Bool { entries.isEmpty }
 
+  public var trackedPaths: [String] {
+    entries.map(\.path).sorted()
+  }
+
+  public var pathToBlobSha: [String: [UInt8]] {
+    Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0.sha) })
+  }
+
+  public mutating func removeEntry(path: String) {
+    entries.removeAll { $0.path == path }
+  }
+
   /// Stage regular files (not directories). Paths must sit under `workTree`.
   public mutating func stage(gitDir: URL, workTree: URL, files: [URL]) throws {
     let wt = workTree.standardizedFileURL
