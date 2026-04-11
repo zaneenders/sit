@@ -22,7 +22,12 @@ Build from the package root, then run inside a normal clone or `git init` work t
 swift build
 .build/debug/sit add <paths…>      # files or directories (skips `.git`)
 .build/debug/sit commit -m "msg"   # tree from index → commit → update HEAD
+.build/debug/sit status            # simplified git status
+.build/debug/sit push [args…]      # runs git push (same flags, e.g. -u origin main)
+.build/debug/sit pull [args…]      # runs git pull
 ```
+
+`push` and `pull` are thin wrappers around **`git`**: they run `git push` / `git pull` from the current directory (via `/usr/bin/env git`), inherit stdin/stdout/stderr, and pass through arguments so behavior matches stock Git. They still require a normal `.git` directory discoverable upward from the cwd, like the other `sit` commands. Use them in a **`git clone`** (or any work tree with remotes) when you want a single entry point; **`git`** must be on `PATH`.
 
 Author/committer identity (in order): optional **`--author-name`** + **`--author-email`** on `sit commit`, then `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, then Git’s usual config files merged like **`git`**: `$XDG_CONFIG_HOME/git/config` (or `~/.config/git/config`), **`~/.gitconfig`**, then **`.git/config`** in the repo (later keys override earlier ones). If nothing supplies both name and email, you’ll get a message explaining how to fix it.
 
@@ -32,7 +37,7 @@ Example without touching global Git config:
 sit commit --author-name 'Your Name' --author-email 'you@example.com' -m 'msg'
 ```
 
-The binary is named **`sit`**, not `git`. It writes objects and an index Git can read; use `git add` / `git commit` if you want Git’s own implementation.
+The binary is named **`sit`**, not `git`. It writes objects and an index Git can read; use `git add` / `git commit` if you want Git’s own implementation. Network sync stays in **`git`**: `sit push` / `sit pull` only forward to it.
 
 ## Tests
 
