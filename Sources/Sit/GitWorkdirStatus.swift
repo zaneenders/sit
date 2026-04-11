@@ -2,7 +2,65 @@ public import Foundation
 
 /// `git status`-style summary using the index, `HEAD`’s tree (loose + pack), and the work tree.
 public enum GitWorkdirStatusText: Sendable {
+  private struct Classification: Sendable {
+    var stagedMod: [String]
+    var stagedAdd: [String]
+    var stagedDel: [String]
+    var unstagedMod: [String]
+    var unstagedDel: [String]
+    var untracked: [String]
+  }
+
+  /// True when the work tree differs from the index (modified/deleted on disk) or paths exist that are not in the index (untracked).
+  ///
+  /// Staged-only changes (index ≠ `HEAD` but disk matches index) return false, matching a common reading of `git status --porcelain`’s work-tree column plus `??` lines.
+  public static func hasUnstagedWorktreeChanges(gitDir: URL, workTree: URL) throws -> Bool {
+    let c = try classify(gitDir: gitDir, workTree: workTree)
+    return !c.unstagedMod.isEmpty || !c.unstagedDel.isEmpty || !c.untracked.isEmpty
+  }
+
   public static func format(gitDir: URL, workTree: URL) throws -> String {
+    let c = try classify(gitDir: gitDir, workTree: workTree)
+    let stagedMod = c.stagedMod
+    let stagedAdd = c.stagedAdd
+    let stagedDel = c.stagedDel
+    let unstagedMod = c.unstagedMod
+    let unstagedDel = c.unstagedDel
+    let untracked = c.untracked
+
+    var lines: [String] = []
+    lines.append(branchLine(gitDir: gitDir))
+    lines.append("")
+    if !stagedMod.isEmpty || !stagedAdd.isEmpty || !stagedDel.isEmpty {
+      lines.append("Changes to be committed:")
+      for p in stagedAdd.sorted() { lines.append("\tnew file:   \(p)") }
+      for p in stagedDel.sorted() { lines.append("\tdeleted:    \(p)") }
+      for p in stagedMod.sorted() { lines.append("\tmodified:   \(p)") }
+      lines.append("")
+    }
+    if !unstagedMod.isEmpty || !unstagedDel.isEmpty {
+      lines.append("Changes not staged for commit:")
+      for p in unstagedDel.sorted() { lines.append("\tdeleted:    \(p)") }
+      for p in unstagedMod.sorted() { lines.append("\tmodified:   \(p)") }
+      lines.append("")
+    }
+    if !untracked.isEmpty {
+      lines.append("Untracked files:")
+      for p in untracked {
+        lines.append("\t\(p)")
+      }
+      lines.append("")
+    }
+    if stagedMod.isEmpty && stagedAdd.isEmpty && stagedDel.isEmpty && unstagedMod.isEmpty && unstagedDel.isEmpty
+      && untracked.isEmpty
+    {
+      lines.append("nothing to commit, working tree clean")
+      lines.append("")
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  private static func classify(gitDir: URL, workTree: URL) throws -> Classification {
     let packs = try GitObjectDatabase.openAllPacks(gitDir: gitDir)
     let indexURL = gitDir.appendingPathComponent("index")
     let index: GitIndex
@@ -22,7 +80,7 @@ public enum GitWorkdirStatusText: Sendable {
       let i = indexMap[path]
       let h = headMap[path]
       switch (i, h) {
-      case let (i?, h?) where i != h:
+      case (let i?, let h?) where i != h:
         stagedMod.append(path)
       case (_?, nil):
         stagedAdd.append(path)
@@ -57,36 +115,14 @@ public enum GitWorkdirStatusText: Sendable {
       untracked.append(path)
     }
 
-    var lines: [String] = []
-    lines.append(branchLine(gitDir: gitDir))
-    lines.append("")
-    if !stagedMod.isEmpty || !stagedAdd.isEmpty || !stagedDel.isEmpty {
-      lines.append("Changes to be committed:")
-      for p in stagedAdd.sorted() { lines.append("\tnew file:   \(p)") }
-      for p in stagedDel.sorted() { lines.append("\tdeleted:    \(p)") }
-      for p in stagedMod.sorted() { lines.append("\tmodified:   \(p)") }
-      lines.append("")
-    }
-    if !unstagedMod.isEmpty || !unstagedDel.isEmpty {
-      lines.append("Changes not staged for commit:")
-      for p in unstagedDel.sorted() { lines.append("\tdeleted:    \(p)") }
-      for p in unstagedMod.sorted() { lines.append("\tmodified:   \(p)") }
-      lines.append("")
-    }
-    if !untracked.isEmpty {
-      lines.append("Untracked files:")
-      for p in untracked {
-        lines.append("\t\(p)")
-      }
-      lines.append("")
-    }
-    if stagedMod.isEmpty && stagedAdd.isEmpty && stagedDel.isEmpty && unstagedMod.isEmpty && unstagedDel.isEmpty
-      && untracked.isEmpty
-    {
-      lines.append("nothing to commit, working tree clean")
-      lines.append("")
-    }
-    return lines.joined(separator: "\n")
+    return Classification(
+      stagedMod: stagedMod,
+      stagedAdd: stagedAdd,
+      stagedDel: stagedDel,
+      unstagedMod: unstagedMod,
+      unstagedDel: unstagedDel,
+      untracked: untracked
+    )
   }
 
   private static func branchLine(gitDir: URL) -> String {
