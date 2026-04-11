@@ -1,12 +1,19 @@
+import RegexBuilder
 public import Foundation
 
 /// Loads `.git/info/exclude` and all `.gitignore` files under the work tree (skipping `.git/`) and answers ignore queries with Git-style **last matching rule wins** semantics.
 ///
 /// Supported subset: `*` / `?` / `**` within segments, `!` negation, trailing `/` (directory-only), leading `/` (anchored under the `.gitignore` directory). Does **not** read `core.excludesfile`; parent-directory ignore / negation interactions may differ from Git in edge cases.
 public struct GitIgnoreMatcher: Sendable {
+  /// `Regex` is not `Sendable` in the stdlib yet; compiled programs are immutable after init.
+  private final class CompiledRegex: @unchecked Sendable {
+    let value: Regex<Substring>
+    init(_ value: Regex<Substring>) { self.value = value }
+  }
+
   private struct Rule: Sendable {
     var negated: Bool
-    var regex: NSRegularExpression
+    var regex: CompiledRegex
   }
 
   private let rules: [Rule]
@@ -19,23 +26,20 @@ public struct GitIgnoreMatcher: Sendable {
     let path = relativePath.replacingOccurrences(of: "\\", with: "/")
     var ignored = false
     for r in rules {
-      if Self.match(r.regex, path: path, isDirectory: isDirectory) {
+      if Self.match(r.regex.value, path: path, isDirectory: isDirectory) {
         ignored = !r.negated
       }
     }
     return ignored
   }
 
-  private static func match(_ re: NSRegularExpression, path: String, isDirectory: Bool) -> Bool {
-    let ns = path as NSString
-    let range = NSRange(location: 0, length: ns.length)
-    if re.firstMatch(in: path, options: [], range: range) != nil {
+  private static func match(_ re: Regex<Substring>, path: String, isDirectory: Bool) -> Bool {
+    if path.firstMatch(of: re) != nil {
       return true
     }
     if isDirectory, !path.hasSuffix("/") {
       let dirPath = path + "/"
-      let ns2 = dirPath as NSString
-      return re.firstMatch(in: dirPath, options: [], range: NSRange(location: 0, length: ns2.length)) != nil
+      return dirPath.firstMatch(of: re) != nil
     }
     return false
   }
@@ -116,7 +120,7 @@ public struct GitIgnoreMatcher: Sendable {
           anchoredToDir: anchoredToDir,
           directoryOnly: directoryOnly
         )
-        out.append(Rule(negated: negated, regex: re))
+        out.append(Rule(negated: negated, regex: CompiledRegex(re)))
       }
     }
     return out
@@ -137,53 +141,74 @@ public struct GitIgnoreMatcher: Sendable {
     return t.trimmingCharacters(in: .whitespaces)
   }
 
+  /// Escapes characters so `string` is safe to splice into a Swift `Regex` / ICU pattern as literal text.
+  /// (Same rules as `NSRegularExpression.escapedPattern(for:)` for path-relevant characters.)
+  private static func regexEscapedLiteral(_ string: String) -> String {
+    var out = ""
+    out.reserveCapacity(string.utf8.count * 2)
+    for ch in string {
+      switch ch {
+      case "\\":
+        out += "\\\\"
+      case "^", "$", ".", "|", "?", "*", "+", "(", ")", "[", "{", "}", "/":
+        out.append("\\")
+        out.append(ch)
+      default:
+        out.append(ch)
+      }
+    }
+    return out
+  }
+
   private static func patternToRegex(
     raw: String,
     base: String,
     anchoredToDir: Bool,
     directoryOnly: Bool
-  ) throws -> NSRegularExpression {
+  ) throws -> Regex<Substring> {
     let internalSlash = raw.contains("/")
-    let baseEsc = NSRegularExpression.escapedPattern(for: base)
+    let baseEsc = regexEscapedLiteral(base)
     let patternBody = try globPathToRegex(raw)
 
-    let suf = matchSuffix(directoryOnly: directoryOnly)
-    let full: String
+    let mid: String
     if internalSlash {
       if anchoredToDir {
-        if base.isEmpty {
-          full = "^" + patternBody + suf
-        } else {
-          full = "^" + baseEsc + "/" + patternBody + suf
-        }
+        mid = base.isEmpty ? patternBody : baseEsc + "/" + patternBody
       } else {
-        if base.isEmpty {
-          full = "^" + patternBody + suf
-        } else {
-          full = "^(?:" + baseEsc + "/)?" + patternBody + suf
-        }
+        mid = base.isEmpty ? patternBody : "(?:" + baseEsc + "/)?" + patternBody
       }
     } else {
       let seg = try globOneSegment(raw)
       if anchoredToDir {
-        if base.isEmpty {
-          full = "^" + seg + suf
-        } else {
-          full = "^" + baseEsc + "/" + seg + suf
-        }
+        mid = base.isEmpty ? seg : baseEsc + "/" + seg
       } else {
-        let root = base.isEmpty ? "^" : "^" + baseEsc + "/"
-        full = root + "(?:.*/)?" + seg + suf
+        let root = base.isEmpty ? "" : baseEsc + "/"
+        mid = root + "(?:.*/)?" + seg
       }
     }
-    return try NSRegularExpression(pattern: full, options: [])
-  }
 
-  /// Git: a pattern without a trailing `/` matches a file or directory at that path; when the
-  /// path is a directory, everything under it matches. A trailing `/` matches only directories
-  /// (paths with a `/` after the matched prefix).
-  private static func matchSuffix(directoryOnly: Bool) -> String {
-    directoryOnly ? "/.*$" : "(?:/.*)?$"
+    // Anchors and tail use RegexBuilder; `mid` is ICU-style pattern text from glob translation.
+    // A bare `String` in `Regex { }` is a literal, not pattern text; embed glob output via `Regex(mid)`.
+    let midRe = try Regex(mid)
+    // `RegexComponentBuilder` has no `buildEither`; split directory-only vs subtree-optional builders.
+    if directoryOnly {
+      return Regex {
+        Anchor.startOfSubject
+        midRe
+        "/"
+        ZeroOrMore(.any)
+        Anchor.endOfSubject
+      }
+    }
+    return Regex {
+      Anchor.startOfSubject
+      midRe
+      Optionally {
+        "/"
+        ZeroOrMore(.any)
+      }
+      Anchor.endOfSubject
+    }
   }
 
   /// Slash-separated glob segments (each segment uses `*` / `?` / `**` rules).
@@ -212,7 +237,7 @@ public struct GitIgnoreMatcher: Sendable {
         out += "[^/]"
         i = s.index(after: i)
       } else {
-        out += NSRegularExpression.escapedPattern(for: String(s[i]))
+        out += regexEscapedLiteral(String(s[i]))
         i = s.index(after: i)
       }
     }
