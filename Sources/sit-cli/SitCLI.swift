@@ -96,11 +96,29 @@ struct SitCommit: ParsableCommand {
   @Option(name: .shortAndLong, help: "Commit message.")
   var message: String
 
+  @Option(name: .customLong("author-name"), help: "Author name (use with --author-email to skip config).")
+  var authorName: String?
+
+  @Option(name: .customLong("author-email"), help: "Author email (use with --author-name).")
+  var authorEmail: String?
+
   mutating func run() throws {
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     let (gitDir, workTree) = try GitRepository.discover(from: cwd)
-    let author = try GitLocalConfig.resolveAuthorIdentity(gitDir: gitDir)
-    let committer = try GitLocalConfig.resolveCommitterIdentity(gitDir: gitDir)
+    let author: GitLocalConfig.UserIdentity
+    let committer: GitLocalConfig.UserIdentity
+    switch (authorName, authorEmail) {
+    case let (.some(n), .some(e)) where !n.isEmpty && !e.isEmpty:
+      author = GitLocalConfig.UserIdentity(name: n, email: e)
+      committer = author
+    case (nil, nil):
+      author = try GitLocalConfig.resolveAuthorIdentity(gitDir: gitDir)
+      committer = try GitLocalConfig.resolveCommitterIdentity(gitDir: gitDir)
+    default:
+      throw ValidationError(
+        "Pass both --author-name and --author-email together, or omit them to use .git/config or GIT_AUTHOR_*."
+      )
+    }
     let hex = try GitStaging.commit(
       gitDir: gitDir,
       workTree: workTree,

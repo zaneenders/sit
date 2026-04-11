@@ -81,7 +81,10 @@ public enum GitLooseObjectWriter {
     let objDir = gitDir.appendingPathComponent("objects/\(dir)", isDirectory: true)
     try fm.createDirectory(at: objDir, withIntermediateDirectories: true)
     let path = objDir.appendingPathComponent(leaf)
-    try Data(zlib).write(to: path)
+    if fm.fileExists(atPath: path.path) {
+      try fm.removeItem(at: path)
+    }
+    try Data(zlib).write(to: path, options: .atomic)
     return sha
   }
 }
