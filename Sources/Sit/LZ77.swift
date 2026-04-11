@@ -1,78 +1,94 @@
-import BinaryParsing
-import Foundation
+// Loose git objects use zlib (RFC 1950) wrapping raw deflate bitstream.
+// Header checks follow RFC 1950 §2.2–2.3 (CMF/FLG, FCHECK, CM/CINFO, FDICT).
 
-struct LZ77: ExpressibleByParsing {
-  let header: Header
+/// First bytes of a zlib stream used by git loose objects: CMF, FLG, and the
+/// first byte of the first deflate block (BTYPE/BFINAL bitfield).
+public struct LZ77: Sendable {
+  public let header: Header
+  public let firstBlockIsBFinal: Bool
+  public let firstBlockType: BType
 
-  @_lifetime(&input)
-  init(parsing input: inout ParserSpan) throws {
-    self.header = try Header(parsing: &input)
-    let value = try UInt8(parsingLittleEndian: &input, byteCount: 1)
-    let (isBFINAL, bType) = try blockBegin(value: value)
+  public init(parsingCompressedBytes bytes: some RandomAccessCollection<UInt8>) throws(LZ77Error) {
+    self.header = try Header(parsingCompressedBytes: bytes)
+    guard bytes.count >= 3 else {
+      throw LZ77Error.message("truncated stream: expected deflate block prefix after zlib header")
+    }
+    let thirdIndex = bytes.index(bytes.startIndex, offsetBy: 2)
+    let (isBFinal, bType) = try blockBegin(value: bytes[thirdIndex])
+    self.firstBlockIsBFinal = isBFinal
+    self.firstBlockType = bType
   }
 
-  struct Header {
-    let compressionMethod: UInt8
-    let flags: UInt8
-    @_lifetime(&input)
-    init(parsing input: inout ParserSpan) throws {
-      let cmf = try UInt8(parsing: &input)
-      let flg = try UInt8(parsing: &input)
+  public struct Header: Sendable {
+    public let compressionMethod: UInt8
+    public let flags: UInt8
 
-      // --- 1. Validate CMF (Compression Method & Info) ---
-      // Git almost always uses 0x78:
-      //   Bits 0-3 (Method): 8 (Deflate)
-      //   Bits 4-7 (Info):   7 (32KB Window Size) -> (7 << 4) | 8 = 0x78
-      guard cmf == 0x78 else {
-        throw LZ77Error.message("Invalid CMF: Expected 0x78 (Deflate + 32KB Window), got \(String(format:"%02X", cmf))")
+    public init(parsingCompressedBytes bytes: some RandomAccessCollection<UInt8>) throws(LZ77Error) {
+      guard bytes.count >= 2 else {
+        throw LZ77Error.message("truncated zlib header")
+      }
+      let i0 = bytes.startIndex
+      let i1 = bytes.index(i0, offsetBy: 1)
+      let cmf = bytes[i0]
+      let flg = bytes[i1]
+
+      // CM (low nibble): only DEFLATE (8) is defined in RFC 1950 for this wrapper.
+      let cm = cmf & 0x0f
+      guard cm == 8 else {
+        throw LZ77Error.message(
+          "Invalid zlib CM: RFC 1950 requires CM=8 (deflate), got \(Self.hexByte(cmf)) (CM=\(cm))"
+        )
+      }
+      // CINFO (high nibble): base-2 log of LZ77 window size minus eight; must be ≤7.
+      let cinfo = (cmf >> 4) & 0x0f
+      guard cinfo <= 7 else {
+        throw LZ77Error.message("Invalid zlib CINFO (window size): \(cinfo) > 7")
       }
 
-      // --- 2. Validate FLG (FCHECK) ---
-      // The 16-bit value (CMF * 256 + FLG) must be a multiple of 31.
-      let checkValue = (UInt16(cmf) * 256) + UInt16(flg)
+      let checkValue = UInt16(cmf) * 256 + UInt16(flg)
       guard checkValue % 31 == 0 else {
-        throw LZ77Error.message("Invalid Header Checksum (FCHECK)")
+        throw LZ77Error.message("Invalid zlib header checksum (FCHECK)")
+      }
+
+      // RFC 1950 §2.3: without a known preset dictionary, FDICT must be rejected.
+      guard (flg & 0x20) == 0 else {
+        throw LZ77Error.message("zlib preset dictionary (FDICT) is not supported")
       }
 
       self.compressionMethod = cmf
       self.flags = flg
     }
+
+    private static func hexByte(_ b: UInt8) -> String {
+      let table = Array("0123456789abcdef".utf8)
+      let hi = Int(b >> 4)
+      let lo = Int(b & 0x0f)
+      return String(decoding: [table[hi], table[lo]], as: UTF8.self)
+    }
   }
 }
 
-func blockBegin(value: UInt8) throws -> (Bool, BType) {
-  let isBFINAL = (value & 1) == 1  // read LSB bit
-  let BTYPE = (value & 6) >> 1  // read next 2 LSB bit
-
+public func blockBegin(value: UInt8) throws(LZ77Error) -> (Bool, BType) {
+  let isBFinal = (value & 1) == 1
+  let btypeBits = (value & 0b0110) >> 1
   let bType: BType
-  switch BTYPE {
-  case 0:
-    // 00 - no compression
-    bType = .notCompressed
-  case 1:
-    // 01 - compressed with fixed Huffman codes
-    bType = .fixedCompression
-  case 2:
-    // 10 - compressed with dynamic Huffman codes
-    bType = .dynamicCompression
-  case 3:
-    // 11 - reserved (error)
-    throw LZ77Error.blockError("reserved, error")
-  default:
-    // ERROR
-    throw LZ77Error.blockError("ERROR")
+  switch btypeBits {
+  case 0: bType = .notCompressed
+  case 1: bType = .fixedCompression
+  case 2: bType = .dynamicCompression
+  case 3: throw LZ77Error.blockError("reserved BTYPE")
+  default: throw LZ77Error.blockError("invalid BTYPE")
   }
-  print(#function, isBFINAL, bType, String(value, radix: 2), String(value, radix: 16))
-  return (isBFINAL, bType)
+  return (isBFinal, bType)
 }
 
-enum BType {
+public enum BType: Sendable, Equatable {
   case notCompressed
   case fixedCompression
   case dynamicCompression
 }
 
-enum LZ77Error: Error, Equatable {
+public enum LZ77Error: Error, Equatable, Sendable {
   case message(String)
   case blockError(String)
 }

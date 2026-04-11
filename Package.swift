@@ -1,29 +1,26 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 import PackageDescription
 
 let package = Package(
   name: "sit",
-  platforms: [.macOS(.v26)],
   products: [
     .library(name: "Sit", targets: ["Sit"])
-  ],
-  dependencies: [
-    .package(url: "https://github.com/apple/swift-binary-parsing", branch: "0.0.1")
   ],
   targets: [
     .target(
       name: "Sit",
-      dependencies: [
-        .product(name: "BinaryParsing", package: "swift-binary-parsing")
-      ],
+      dependencies: [],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
-        .enableExperimentalFeature("LifetimeDependence"),
+        .enableExperimentalFeature("InternalImportsByDefault"),
       ]),
     .testTarget(
       name: "SitTests",
       dependencies: [
         .byName(name: "Sit")
+      ],
+      swiftSettings: [
+        .enableExperimentalFeature("Lifetimes"),
       ]),
   ]
 )
