@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct GitErrorAndStagingEdgeTests: ~Copyable {
   @Test func missingUserIdentityLocalizedDescriptionMentionsGitConfig() {
     let err: LocalizedError = GitIndexError.missingUserIdentity

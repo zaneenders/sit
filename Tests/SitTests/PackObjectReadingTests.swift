@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct PackObjectReadingTests: ~Copyable {
   @Test func readsUndeltifiedBlobFromPackfile() throws {
     let (pack, idx) = try Self.loadSitPack()
@@ -122,9 +122,11 @@ struct PackObjectReadingTests: ~Copyable {
   }
 
   private static func gitCatFile(packageRoot: URL, args: [String]) throws -> [UInt8] {
-    guard let git = ["/usr/bin/git", "/bin/git", "/usr/local/bin/git"].first(where: {
-      FileManager.default.isExecutableFile(atPath: $0)
-    }) else {
+    guard
+      let git = ["/usr/bin/git", "/bin/git", "/usr/local/bin/git"].first(where: {
+        FileManager.default.isExecutableFile(atPath: $0)
+      })
+    else {
       throw GitPackError.truncatedPack
     }
     let proc = Process()

@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct GitIndexStagingTests: ~Copyable {
   @Test func indexSerializeRoundTrip() throws {
     let templates = try GitInit.discoverTemplateDirectory()

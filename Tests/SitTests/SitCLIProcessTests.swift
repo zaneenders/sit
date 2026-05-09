@@ -4,7 +4,7 @@ import Testing
 @testable import Sit
 
 /// Spawns the built `sit` executable (not in-process library calls).
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct SitCLIProcessTests: ~Copyable {
   /// `sit init` should produce the same `.git` tree as `git init -b <branch>` when templates match.
   @Test func sitInitProcessMatchesGitInitLayout() throws {

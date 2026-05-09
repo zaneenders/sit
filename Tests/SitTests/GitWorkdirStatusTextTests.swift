@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct GitWorkdirStatusTextTests: ~Copyable {
   @Test func hasUnstagedWorktreeChangesFalseWhenCleanAfterCommit() throws {
     let templates = try GitInit.discoverTemplateDirectory()

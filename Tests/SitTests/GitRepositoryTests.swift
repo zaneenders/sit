@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct GitRepositoryTests: ~Copyable {
   @Test func discoverThrowsNotFoundWhenNoGitDirectory() throws {
     try TempDirectory.withRemoval { root in

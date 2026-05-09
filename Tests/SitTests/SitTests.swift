@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct SitTests: ~Copyable {
   @Test func deflateStoredRoundTripsViaSitInflate() throws {
     let plain = Array("hello world".utf8)

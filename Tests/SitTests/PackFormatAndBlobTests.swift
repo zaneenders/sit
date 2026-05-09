@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct PackFormatAndBlobTests: ~Copyable {
   @Test func packIndexRejectsBadMagic() {
     let junk = [UInt8](repeating: 0, count: 2048)
@@ -138,9 +138,9 @@ struct PackFormatAndBlobTests: ~Copyable {
       let pyAdler = try GitDogfoodHelpers.zlibAdler32ViaPythonRequired(sample)
       let storedBE =
         UInt32(z[z.count - 4]) << 24
-          | UInt32(z[z.count - 3]) << 16
-          | UInt32(z[z.count - 2]) << 8
-          | UInt32(z[z.count - 1])
+        | UInt32(z[z.count - 3]) << 16
+        | UInt32(z[z.count - 2]) << 8
+        | UInt32(z[z.count - 1])
       #expect(storedBE == pyAdler)
     }
   }

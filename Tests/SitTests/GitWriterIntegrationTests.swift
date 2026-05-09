@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct GitWriterIntegrationTests: ~Copyable {
   /// `Sit`’s `git init` layout should match `git init -b main` when using the same template directory.
   @Test func sitInitMatchesGitInitByteForByte() throws {

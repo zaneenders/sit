@@ -3,7 +3,7 @@ import Testing
 
 @testable import Sit
 
-@Suite
+@Suite(.timeLimit(.minutes(1)))
 struct GitIgnoreTests: ~Copyable {
   @Test func starLogIgnoresDeepPaths() throws {
     let templates = try GitInit.discoverTemplateDirectory()

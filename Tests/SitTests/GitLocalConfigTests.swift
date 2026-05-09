@@ -10,7 +10,7 @@ import Glibc
 #endif
 
 /// Mutates process environment; keep serialized so parallel tests do not clobber each other.
-@Suite("GitLocalConfig", .serialized)
+@Suite(.timeLimit(.minutes(1)), .serialized)
 struct GitLocalConfigTests: ~Copyable {
 
   @Test func readUserIdentityUsesRepoConfigOverXdgWhenHomeIsolated() throws {
@@ -31,10 +31,10 @@ struct GitLocalConfigTests: ~Copyable {
       let gitDir = work.appendingPathComponent(".git", isDirectory: true)
       var cfg = try String(contentsOf: gitDir.appendingPathComponent("config"), encoding: .utf8)
       cfg += """
-      [user]
-      \tname = From Repo
-      \temail = repo@example.com
-      """
+        [user]
+        \tname = From Repo
+        \temail = repo@example.com
+        """
       try cfg.write(to: gitDir.appendingPathComponent("config"), atomically: true, encoding: .utf8)
 
       try Self.withIsolatedHome(fakeHome.path) {
@@ -55,10 +55,10 @@ struct GitLocalConfigTests: ~Copyable {
       let gitDir = work.appendingPathComponent(".git", isDirectory: true)
       var cfg = try String(contentsOf: gitDir.appendingPathComponent("config"), encoding: .utf8)
       cfg += """
-      [user]
-      \tname = "Quoted Name"
-      \temail = quoted@example.com
-      """
+        [user]
+        \tname = "Quoted Name"
+        \temail = quoted@example.com
+        """
       try cfg.write(to: gitDir.appendingPathComponent("config"), atomically: true, encoding: .utf8)
 
       try Self.withIsolatedHome(fakeHome.path) {
