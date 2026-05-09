@@ -61,33 +61,33 @@ struct PackFormatAndBlobTests: ~Copyable {
 
   // MARK: - More objects from pack-58dfe777… (verify-pack corpus)
 
-  @Test func readsSecondOfsDeltaBlobFromPackfile() throws {
-    try Self.assertPackBlobMatchesGit(
+  @Test func readsSecondOfsDeltaBlobFromPackfile() async throws {
+    try await Self.assertPackBlobMatchesGit(
       "8ac869349a2a5a9cee73136d3f283966ade4377f"
     )
   }
 
-  @Test func readsTinyOfsDeltaBlobFromPackfile() throws {
-    try Self.assertPackBlobMatchesGit(
+  @Test func readsTinyOfsDeltaBlobFromPackfile() async throws {
+    try await Self.assertPackBlobMatchesGit(
       "01ce9042fe2a5132f646fd896bb9ac657519cff2"
     )
   }
 
-  @Test func readsOfsDeltaTreeFromPackfile() throws {
-    try Self.assertPackObjectMatchesGit(
+  @Test func readsOfsDeltaTreeFromPackfile() async throws {
+    try await Self.assertPackObjectMatchesGit(
       type: "tree",
       sha: "ea9e62b9a09637b62470f0a8760d1f99a616aa6b"
     )
   }
 
-  @Test func readsLargeUndeltifiedBlobFromPackfile() throws {
-    try Self.assertPackBlobMatchesGit(
+  @Test func readsLargeUndeltifiedBlobFromPackfile() async throws {
+    try await Self.assertPackBlobMatchesGit(
       "208e1f03013314fa2da02866da74d5ff0452a554"
     )
   }
 
-  @Test func readsAnotherCommitFromPackfile() throws {
-    try Self.assertPackObjectMatchesGit(
+  @Test func readsAnotherCommitFromPackfile() async throws {
+    try await Self.assertPackObjectMatchesGit(
       type: "commit",
       sha: "dbc7a7efcab0551800aff9f61daa88afd40047df"
     )
@@ -126,7 +126,7 @@ struct PackFormatAndBlobTests: ~Copyable {
     #expect(Array(combined[consumed...]) == tail)
   }
 
-  @Test func sitZlibAdlerMatchesPythonForSeveralPayloads() throws {
+  @Test func sitZlibAdlerMatchesPythonForSeveralPayloads() async throws {
     try GitDogfoodHelpers.requirePython3ForDogfood()
     let samples: [Data] = [
       Data(),
@@ -135,7 +135,7 @@ struct PackFormatAndBlobTests: ~Copyable {
     ]
     for sample in samples {
       let z = try ZlibLooseObject.compress([UInt8](sample))
-      let pyAdler = try GitDogfoodHelpers.zlibAdler32ViaPythonRequired(sample)
+      let pyAdler = try await GitDogfoodHelpers.zlibAdler32ViaPythonRequired(sample)
       let storedBE =
         UInt32(z[z.count - 4]) << 24
         | UInt32(z[z.count - 3]) << 16
@@ -145,9 +145,9 @@ struct PackFormatAndBlobTests: ~Copyable {
     }
   }
 
-  @Test func packMatchesGitForEachLocalBranchTipCommit() throws {
+  @Test func packMatchesGitForEachLocalBranchTipCommit() async throws {
     let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let tips = GitDogfoodHelpers.gitLocalBranchTipCommitShas(packageRoot: root)
+    let tips = await GitDogfoodHelpers.gitLocalBranchTipCommitShas(packageRoot: root)
     guard !tips.isEmpty else {
       Issue.record("skip: no local refs/heads tips")
       return
@@ -159,7 +159,7 @@ struct PackFormatAndBlobTests: ~Copyable {
       guard let shaBytes = GitDogfoodHelpers.sha20(fromHex40: sha) else { continue }
       guard gitPack.index.offset(for: shaBytes) != nil else { continue }
       let got = try gitPack.serializedObject(sha20: shaBytes)
-      guard let want = GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: "commit", sha: sha) else {
+      guard let want = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: "commit", sha: sha) else {
         Issue.record("skip: git cat-file commit \(sha)")
         return
       }
@@ -196,16 +196,16 @@ struct PackFormatAndBlobTests: ~Copyable {
     return b
   }
 
-  private static func assertPackBlobMatchesGit(_ hex40: String) throws {
-    try assertPackObjectMatchesGit(type: "blob", sha: hex40)
+  private static func assertPackBlobMatchesGit(_ hex40: String) async throws {
+    try await assertPackObjectMatchesGit(type: "blob", sha: hex40)
   }
 
-  private static func assertPackObjectMatchesGit(type: String, sha: String) throws {
+  private static func assertPackObjectMatchesGit(type: String, sha: String) async throws {
     let root = packageRoot()
     let (pack, idx) = try loadSitPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
     let got = try gitPack.serializedObject(sha20: sha20(sha))
-    guard let want = GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: type, sha: sha) else {
+    guard let want = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: type, sha: sha) else {
       Issue.record("skip: git cat-file \(type) \(sha)")
       return
     }

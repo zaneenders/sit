@@ -8,13 +8,13 @@ public enum GitRepositoryError: Error, Equatable, Sendable {
 public enum GitRepository: Sendable {
   /// Walks up from `directory` to find a `.git` directory and returns `(gitDir, workTree)`.
   public static func discover(from directory: URL) throws -> (gitDir: URL, workTree: URL) {
-    var cur = directory.resolvingSymlinksInPath().standardizedFileURL
+    var cur = directory.standardizedFileURL.resolvingSymlinksInPath()
     if !cur.hasDirectoryPath {
       cur = cur.deletingLastPathComponent()
     }
     let fm = FileManager.default
     let start = cur.path
-    while true {
+    for _ in 0..<256 {
       let dotGit = cur.appendingPathComponent(".git", isDirectory: false)
       if fm.fileExists(atPath: dotGit.path) {
         var isDir: ObjCBool = false
@@ -30,5 +30,6 @@ public enum GitRepository: Sendable {
       }
       cur = parent
     }
+    throw GitRepositoryError.notFound(searchRoot: start)
   }
 }

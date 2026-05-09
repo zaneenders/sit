@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Subprocess
 
 @testable import Sit
 
@@ -22,13 +23,13 @@ struct GitIndexStagingTests: ~Copyable {
     }
   }
 
-  @Test func sitTreeMatchesGitWriteTree() throws {
+  @Test func sitTreeMatchesGitWriteTree() async throws {
     guard let git = Self.gitPath() else {
       Issue.record("skip: git not found on PATH")
       return
     }
     let templates = try GitInit.discoverTemplateDirectory()
-    try TempDirectory.withRemoval { root in
+    try await TempDirectory.withRemoval { root in
       let work = root.appendingPathComponent("w", isDirectory: true)
       try GitInit.createEmptyRepository(workTree: work, initialBranch: "main", templateDirectory: templates)
       let gitDir = work.appendingPathComponent(".git", isDirectory: true)
@@ -36,28 +37,23 @@ struct GitIndexStagingTests: ~Copyable {
       try Data("alpha\n".utf8).write(to: work.appendingPathComponent("a.txt"))
       try Data("beta\n".utf8).write(to: work.appendingPathComponent("b.txt"))
       var index = GitIndex()
-      try index.stage(
-        gitDir: gitDir, workTree: work,
-        files: [
-          work.appendingPathComponent("a.txt"),
-          work.appendingPathComponent("b.txt"),
-        ])
+      try index.stage(gitDir: gitDir, workTree: work,
+        files: [work.appendingPathComponent("a.txt"), work.appendingPathComponent("b.txt")])
       try index.write(to: gitDir.appendingPathComponent("index"))
       let reloaded = try GitIndex.load(from: gitDir.appendingPathComponent("index"))
       let sitHex = GitHex.encodeLower(try reloaded.writeRootTree(gitDir: gitDir))
-      let gitTree = try Self.runGitStdout(git, cwd: work, arguments: ["write-tree"]).trimmingCharacters(
-        in: .whitespacesAndNewlines)
-      #expect(sitHex == gitTree)
+      let gitTree = try await Self.runGitStdout(git, arguments: ["-C", work.path, "write-tree"])
+      #expect(sitHex == gitTree.trimmingCharacters(in: .whitespacesAndNewlines))
     }
   }
 
-  @Test func sitStagingCommitPassesGitFsck() throws {
+  @Test func sitStagingCommitPassesGitFsck() async throws {
     guard let git = Self.gitPath() else {
       Issue.record("skip: git not found on PATH")
       return
     }
     let templates = try GitInit.discoverTemplateDirectory()
-    try TempDirectory.withRemoval { root in
+    try await TempDirectory.withRemoval { root in
       let work = root.appendingPathComponent("w", isDirectory: true)
       try GitInit.createEmptyRepository(workTree: work, initialBranch: "main", templateDirectory: templates)
       let gitDir = work.appendingPathComponent(".git", isDirectory: true)
@@ -68,20 +64,15 @@ struct GitIndexStagingTests: ~Copyable {
       try index.stage(gitDir: gitDir, workTree: work, files: [file])
       try index.write(to: gitDir.appendingPathComponent("index"))
       let author = GitLocalConfig.UserIdentity(name: "sit", email: "sit@test")
-      let commitHex = try GitStaging.commit(
-        gitDir: gitDir,
-        workTree: work,
-        message: "from index",
-        author: author,
-        committer: author
-      )
-      let fsck = try Self.runGit(git, cwd: work, arguments: ["fsck", "--strict"])
-      #expect(fsck == 0)
-      let head = try Self.runGitStdout(git, cwd: work, arguments: ["rev-parse", "HEAD"]).trimmingCharacters(
-        in: .whitespacesAndNewlines)
-      #expect(head == commitHex)
+      let commitHex = try GitStaging.commit(gitDir: gitDir, workTree: work,
+        message: "from index", author: author, committer: author)
+      #expect(try await Self.runGit(git, arguments: ["-C", work.path, "fsck", "--strict"]) == 0)
+      let head = try await Self.runGitStdout(git, arguments: ["-C", work.path, "rev-parse", "HEAD"])
+      #expect(head.trimmingCharacters(in: .whitespacesAndNewlines) == commitHex)
     }
   }
+
+  // MARK: - Helpers
 
   private static func appendUserConfig(gitDir: URL) throws {
     let url = gitDir.appendingPathComponent("config")
@@ -97,34 +88,26 @@ struct GitIndexStagingTests: ~Copyable {
     return nil
   }
 
-  private static func devNullForProcess() -> FileHandle {
-    try! FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
+  private static func runGit(_ git: String, arguments: [String]) async throws -> Int32 {
+    let record = try await Subprocess.run(
+      .name(git),
+      arguments: Arguments(arguments),
+      output: .discarded,
+      error: .discarded
+    )
+    return record.terminationStatus.isSuccess ? 0 : 1
   }
 
-  private static func runGit(_ git: String, cwd: URL, arguments: [String]) throws -> Int32 {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: git)
-    p.arguments = ["-C", cwd.path] + arguments
-    p.standardOutput = Self.devNullForProcess()
-    p.standardError = Self.devNullForProcess()
-    try p.run()
-    p.waitUntilExit()
-    return p.terminationStatus
-  }
-
-  private static func runGitStdout(_ git: String, cwd: URL, arguments: [String]) throws -> String {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: git)
-    p.arguments = ["-C", cwd.path] + arguments
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = Self.devNullForProcess()
-    try p.run()
-    let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
-    p.waitUntilExit()
-    guard p.terminationStatus == 0 else {
+  private static func runGitStdout(_ git: String, arguments: [String]) async throws -> String {
+    let record = try await Subprocess.run(
+      .name(git),
+      arguments: Arguments(arguments),
+      output: .string(limit: Int.max),
+      error: .discarded
+    )
+    guard record.terminationStatus.isSuccess, let out = record.standardOutput else {
       throw GitInitError.fileSystemError("git \(arguments.joined(separator: " ")) failed")
     }
-    return String(decoding: data, as: UTF8.self)
+    return out
   }
 }

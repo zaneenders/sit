@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Subprocess
 
 @testable import Sit
 
@@ -32,16 +33,14 @@ struct SitTests: ~Copyable {
     #expect(Array(back) == plain)
   }
 
-  /// Every object reachable from **any ref** (`rev-list --objects --all`): raw
-  /// `git cat-file` bytes round-trip through Sit’s zlib compress + decompress (no Python).
-  @Test func dogfoodAllReachableObjectsZlibSitRoundTrip() throws {
+  @Test func dogfoodAllReachableObjectsZlibSitRoundTrip() async throws {
     let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let shas = GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
+    let shas = await GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
     guard !shas.isEmpty else {
       Issue.record("skip dogfood: no SHAs from git rev-list (not a git checkout?)")
       return
     }
-    guard let batch = GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
+    guard let batch = await GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
       Issue.record("skip dogfood: git cat-file --batch failed")
       return
     }
@@ -54,16 +53,15 @@ struct SitTests: ~Copyable {
     }
   }
 
-  /// Same all-refs reachable set: Sit zlib must decompress under Python’s `zlib`.
-  @Test func dogfoodAllReachableObjectsZlibPythonDecompress() throws {
+  @Test func dogfoodAllReachableObjectsZlibPythonDecompress() async throws {
     try GitDogfoodHelpers.requirePython3ForDogfood()
     let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let shas = GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
+    let shas = await GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
     guard !shas.isEmpty else {
       Issue.record("skip dogfood: no SHAs from git rev-list")
       return
     }
-    guard let batch = GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
+    guard let batch = await GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
       Issue.record("skip dogfood: git cat-file --batch failed")
       return
     }
@@ -71,22 +69,21 @@ struct SitTests: ~Copyable {
     for (_, type, raw) in batch {
       guard allowed.contains(type) else { continue }
       let swiftZlib = try ZlibLooseObject.compress([UInt8](raw))
-      let pyPlain = try GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
+      let pyPlain = try await GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
       #expect(pyPlain == raw)
     }
   }
 
-  /// Every `blob` at `HEAD` as a synthetic loose object (`blob <n>\\0` + payload).
-  @Test func dogfoodEveryHeadTreeBlobAsLooseObjectZlibPython() throws {
+  @Test func dogfoodEveryHeadTreeBlobAsLooseObjectZlibPython() async throws {
     try GitDogfoodHelpers.requirePython3ForDogfood()
     let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let rows = GitDogfoodHelpers.gitLsTreeRecursive(packageRoot: root)
+    let rows = await GitDogfoodHelpers.gitLsTreeRecursive(packageRoot: root)
     guard !rows.isEmpty else {
       Issue.record("skip dogfood: git ls-tree empty (not a git checkout?)")
       return
     }
     for (_, type, sha, _) in rows where type == "blob" {
-      guard let body = GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: "blob", sha: sha) else {
+      guard let body = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: "blob", sha: sha) else {
         Issue.record("skip dogfood: git cat-file blob failed for \(sha)")
         return
       }
@@ -94,17 +91,16 @@ struct SitTests: ~Copyable {
       raw.append(contentsOf: "blob \(body.count)\0".utf8)
       raw.append(body)
       let swiftZlib = try ZlibLooseObject.compress([UInt8](raw))
-      let pyPlain = try GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
+      let pyPlain = try await GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
       #expect(pyPlain == raw)
     }
   }
 
-  /// Sit’s pure-Swift zlib → Python’s `zlib.decompress` must match `.git` bytes.
-  @Test func dogfoodSwiftZlibDecompressedByPythonMatchesGitBlob() throws {
+  @Test func dogfoodSwiftZlibDecompressedByPythonMatchesGitBlob() async throws {
     try GitDogfoodHelpers.requirePython3ForDogfood()
     let packageRoot = Self.packageRoot()
-    guard let sha = Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
-      let fileBytes = Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
+    guard let sha = await Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
+      let fileBytes = await Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
     else {
       Issue.record("skip dogfood: git rev-parse / cat-file failed (not a git checkout?)")
       return
@@ -112,7 +108,7 @@ struct SitTests: ~Copyable {
     let header = Data("blob \(fileBytes.count)\0".utf8)
     let rawObject = header + fileBytes
     let swiftZlib = try ZlibLooseObject.compress([UInt8](rawObject))
-    let pyPlain = try GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
+    let pyPlain = try await GitDogfoodHelpers.zlibDecompressViaPythonRequired(Data(swiftZlib))
     #expect(pyPlain == rawObject)
   }
 
@@ -127,7 +123,6 @@ struct SitTests: ~Copyable {
     #expect(Array(blob.payload) == Array("hello".utf8))
   }
 
-  /// `python3 -c "import zlib; zlib.compress(b'blob 11\\x00hello world')"` — exercises dynamic Huffman.
   @Test func zlibDecompressesHelloWorldBlob() throws {
     let zlibBlob: [UInt8] = [
       0x78, 0x9c, 0x4b, 0xca, 0xc9, 0x4f, 0x52, 0x30, 0x34, 0x64, 0xc8, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28,
@@ -139,9 +134,7 @@ struct SitTests: ~Copyable {
     #expect(Array(blob.payload) == Array("hello world".utf8))
   }
 
-  /// Build a real `blob <n>\\0` + `Package.swift` bytes, zlib-compress with
-  /// Python, then inflate + parse purely in Sit — tight loop against this repo.
-  @Test func dogfoodPackageSwiftAsGitBlobRoundTrip() throws {
+  @Test func dogfoodPackageSwiftAsGitBlobRoundTrip() async throws {
     try GitDogfoodHelpers.requirePython3ForDogfood()
     let packageRoot = Self.packageRoot()
     let packageSwift = packageRoot.appendingPathComponent("Package.swift")
@@ -152,9 +145,7 @@ struct SitTests: ~Copyable {
     let fileData = try Data(contentsOf: packageSwift)
     let header = Data("blob \(fileData.count)\0".utf8)
     let rawObject = header + fileData
-
-    let zlibData = try GitDogfoodHelpers.zlibCompressViaPythonRequired(rawObject)
-
+    let zlibData = try await GitDogfoodHelpers.zlibCompressViaPythonRequired(rawObject)
     let inflated = try ZlibLooseObject.decompress([UInt8](zlibData))
     #expect(inflated.elementsEqual(rawObject))
     let parsed = try ParsedGitBlob(decodedLooseObjectBytes: inflated)
@@ -162,20 +153,18 @@ struct SitTests: ~Copyable {
     #expect(Data(parsed.payload) == fileData)
   }
 
-  /// `git cat-file blob <sha>` (file bytes) plus a synthetic `blob <n>\\0` header
-  /// round-trips through Python’s zlib and Sit’s inflater.
-  @Test func dogfoodMatchesGitCatFileBlob() throws {
+  @Test func dogfoodMatchesGitCatFileBlob() async throws {
     try GitDogfoodHelpers.requirePython3ForDogfood()
     let packageRoot = Self.packageRoot()
-    guard let sha = Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
-      let fileBytes = Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
+    guard let sha = await Self.gitRevParse(packageRoot: packageRoot, rev: "HEAD:Package.swift"),
+      let fileBytes = await Self.gitCatFileBlob(packageRoot: packageRoot, object: sha)
     else {
       Issue.record("skip dogfood: git rev-parse / cat-file failed (not a git checkout?)")
       return
     }
     let header = Data("blob \(fileBytes.count)\0".utf8)
     let rawObject = header + fileBytes
-    let zlibData = try GitDogfoodHelpers.zlibCompressViaPythonRequired(rawObject)
+    let zlibData = try await GitDogfoodHelpers.zlibCompressViaPythonRequired(rawObject)
     let inflated = try ZlibLooseObject.decompress([UInt8](zlibData))
     #expect(inflated.elementsEqual(rawObject))
   }
@@ -219,6 +208,8 @@ struct SitTests: ~Copyable {
     }
   }
 
+  // MARK: - Helpers
+
   private static func packageRoot() -> URL {
     URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -226,21 +217,18 @@ struct SitTests: ~Copyable {
       .deletingLastPathComponent()
   }
 
-  private static func gitRevParse(packageRoot: URL, rev: String) -> String? {
+  private static func gitRevParse(packageRoot: URL, rev: String) async -> String? {
     guard let git = Self.gitExecutable() else { return nil }
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: git)
-    proc.arguments = ["-C", packageRoot.path, "rev-parse", rev]
-    let stdout = Pipe()
-    proc.standardOutput = stdout
-    proc.standardError = Pipe()
     do {
-      try proc.run()
-      let out = try stdout.fileHandleForReading.readToEnd() ?? Data()
-      proc.waitUntilExit()
-      guard proc.terminationStatus == 0 else { return nil }
-      let s = String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-      return s.isEmpty ? nil : s
+      let record = try await Subprocess.run(
+        .name(git),
+        arguments: Arguments(["-C", packageRoot.path, "rev-parse", rev]),
+        output: .string(limit: Int.max),
+        error: .discarded
+      )
+      guard record.terminationStatus.isSuccess, let s = record.standardOutput else { return nil }
+      let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
     } catch {
       return nil
     }
@@ -253,20 +241,17 @@ struct SitTests: ~Copyable {
     return nil
   }
 
-  private static func gitCatFileBlob(packageRoot: URL, object: String) -> Data? {
+  private static func gitCatFileBlob(packageRoot: URL, object: String) async -> Data? {
     guard let git = Self.gitExecutable() else { return nil }
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: git)
-    proc.arguments = ["-C", packageRoot.path, "cat-file", "blob", object]
-    let stdout = Pipe()
-    proc.standardOutput = stdout
-    proc.standardError = Pipe()
     do {
-      try proc.run()
-      let out = try stdout.fileHandleForReading.readToEnd() ?? Data()
-      proc.waitUntilExit()
-      guard proc.terminationStatus == 0, !out.isEmpty else { return nil }
-      return out
+      let record = try await Subprocess.run(
+        .name(git),
+        arguments: Arguments(["-C", packageRoot.path, "cat-file", "blob", object]),
+        output: .bytes(limit: Int.max),
+        error: .discarded
+      )
+      guard record.terminationStatus.isSuccess, !record.standardOutput.isEmpty else { return nil }
+      return Data(record.standardOutput)
     } catch {
       return nil
     }

@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1)))
 struct GitRepositoryTests: ~Copyable {
-  @Test func discoverThrowsNotFoundWhenNoGitDirectory() throws {
+  @Test func discoverThrowsNotFoundWhenNoGitDirectory() async throws {
     try TempDirectory.withRemoval { root in
       let empty = root.appendingPathComponent("nowhere", isDirectory: true)
       try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
@@ -15,7 +15,7 @@ struct GitRepositoryTests: ~Copyable {
     }
   }
 
-  @Test func discoverThrowsWhenDotGitIsAFile() throws {
+  @Test func discoverThrowsWhenDotGitIsAFile() async throws {
     try TempDirectory.withRemoval { root in
       let work = root.appendingPathComponent("wt", isDirectory: true)
       try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -27,7 +27,7 @@ struct GitRepositoryTests: ~Copyable {
     }
   }
 
-  @Test func discoverFindsRepoFromNestedFileURL() throws {
+  @Test func discoverFindsRepoFromNestedFileURL() async throws {
     let templates = try GitInit.discoverTemplateDirectory()
     try TempDirectory.withRemoval { root in
       let work = root.appendingPathComponent("repo", isDirectory: true)

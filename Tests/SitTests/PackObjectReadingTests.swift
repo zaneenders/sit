@@ -1,68 +1,67 @@
 import Foundation
 import Testing
+import Subprocess
 
 @testable import Sit
 
 @Suite(.timeLimit(.minutes(1)))
 struct PackObjectReadingTests: ~Copyable {
-  @Test func readsUndeltifiedBlobFromPackfile() throws {
+  @Test func readsUndeltifiedBlobFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
     let sha = Self.sha20("40755ccd19c2cd3f55d2e2e15a1d2f50eabe2f10")
     let got = try git.serializedObject(sha20: sha)
-    let want = try Self.gitCatFile(
+    let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
       args: ["cat-file", "blob", "40755ccd19c2cd3f55d2e2e15a1d2f50eabe2f10"]
     )
     #expect(Array(got) == want)
   }
 
-  @Test func readsUndeltifiedCommitFromPackfile() throws {
+  @Test func readsUndeltifiedCommitFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
     let sha = Self.sha20("aed4b92c79f9142fdf2aeb920e7105302d14e9af")
     let got = try git.serializedObject(sha20: sha)
-    let want = try Self.gitCatFile(
+    let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
       args: ["cat-file", "commit", "aed4b92c79f9142fdf2aeb920e7105302d14e9af"]
     )
     #expect(Array(got) == want)
   }
 
-  @Test func readsOfsDeltaBlobFromPackfile() throws {
+  @Test func readsOfsDeltaBlobFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
     let sha = Self.sha20("608b965d0fae32711d0c5a03de66c8c2ebc82f66")
     let got = try git.serializedObject(sha20: sha)
-    let want = try Self.gitCatFile(
+    let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
       args: ["cat-file", "blob", "608b965d0fae32711d0c5a03de66c8c2ebc82f66"]
     )
     #expect(Array(got) == want)
   }
 
-  @Test func readsTreeFromPackfile() throws {
+  @Test func readsTreeFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
     let sha = Self.sha20("1695d68b7d4da126abca17c308ef3729ecf5e6d3")
     let got = try git.serializedObject(sha20: sha)
-    let want = try Self.gitCatFile(
+    let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
       args: ["cat-file", "tree", "1695d68b7d4da126abca17c308ef3729ecf5e6d3"]
     )
     #expect(Array(got) == want)
   }
 
-  /// Every object reachable with `rev-list --objects --all` that appears in the
-  /// fixture `.idx` must match `git cat-file <type> <sha>` (Sit’s pack decoder).
-  @Test func readsEveryIndexedReachableObjectInSitPackMatchesGitCatFile() throws {
+  @Test func readsEveryIndexedReachableObjectInSitPackMatchesGitCatFile() async throws {
     let root = Self.packageRoot()
-    let shas = GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
+    let shas = await GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: root)
     guard !shas.isEmpty else {
       Issue.record("skip: git rev-list --objects --all produced no SHAs")
       return
     }
-    guard let batch = GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
+    guard let batch = await GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: root, shas: shas) else {
       Issue.record("skip: git cat-file --batch failed")
       return
     }
@@ -75,7 +74,7 @@ struct PackObjectReadingTests: ~Copyable {
       guard let shaBytes = GitDogfoodHelpers.sha20(fromHex40: sha) else { continue }
       guard gitPack.index.offset(for: shaBytes) != nil else { continue }
       let got = try gitPack.serializedObject(sha20: shaBytes)
-      guard let want = GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: type, sha: sha) else {
+      guard let want = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: type, sha: sha) else {
         Issue.record("skip: git cat-file \(type) \(sha) failed")
         return
       }
@@ -121,7 +120,7 @@ struct PackObjectReadingTests: ~Copyable {
     return out
   }
 
-  private static func gitCatFile(packageRoot: URL, args: [String]) throws -> [UInt8] {
+  private static func gitCatFile(packageRoot: URL, args: [String]) async throws -> [UInt8] {
     guard
       let git = ["/usr/bin/git", "/bin/git", "/usr/local/bin/git"].first(where: {
         FileManager.default.isExecutableFile(atPath: $0)
@@ -129,18 +128,15 @@ struct PackObjectReadingTests: ~Copyable {
     else {
       throw GitPackError.truncatedPack
     }
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: git)
-    proc.arguments = ["-C", packageRoot.path] + args
-    let stdout = Pipe()
-    proc.standardOutput = stdout
-    proc.standardError = Pipe()
-    try proc.run()
-    let out = try stdout.fileHandleForReading.readToEnd() ?? Data()
-    proc.waitUntilExit()
-    guard proc.terminationStatus == 0 else {
+    let record = try await Subprocess.run(
+      .name(git),
+      arguments: Arguments(["-C", packageRoot.path] + args),
+      output: .bytes(limit: Int.max),
+      error: .discarded
+    )
+    guard record.terminationStatus.isSuccess else {
       throw GitPackError.truncatedPack
     }
-    return Array(out)
+    return record.standardOutput
   }
 }

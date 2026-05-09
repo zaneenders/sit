@@ -11,6 +11,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/apple/swift-crypto.git", from: "3.8.0"),
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+    .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
   ],
   targets: [
     .target(
@@ -37,6 +38,7 @@ let package = Package(
       dependencies: [
         .byName(name: "Sit"),
         .target(name: "sit-cli"),
+        .product(name: "Subprocess", package: "swift-subprocess"),
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes")

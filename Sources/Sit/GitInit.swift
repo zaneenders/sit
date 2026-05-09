@@ -2,10 +2,18 @@ public import Foundation
 
 /// Create a new non-bare repository layout compatible with command-line `git init`.
 public enum GitInit {
-  /// Same bytes as `git init -b <initialBranch>` for `core.repositoryformatversion = 0` (matches `git` 2.43 `config` on Linux).
+  /// Same bytes as `git init -b <initialBranch>` for `core.repositoryformatversion = 0`.
+  /// Includes macOS-specific settings (`ignorecase`, `precomposeunicode`) that Apple Git adds
+  /// unconditionally on Darwin; they are harmless on other platforms.
+  #if os(macOS)
+  public static let defaultConfigBytes: [UInt8] = Array(
+    "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tignorecase = true\n\tprecomposeunicode = true\n".utf8
+  )
+  #else
   public static let defaultConfigBytes: [UInt8] = Array(
     "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n".utf8
   )
+  #endif
 
   /// Discover `share/git-core/templates` (same tree `git init` copies from on many systems).
   public static func discoverTemplateDirectory() throws -> URL {
@@ -15,7 +23,12 @@ public enum GitInit {
         return u
       }
     }
-    for path in ["/usr/share/git-core/templates", "/usr/local/share/git-core/templates"] {
+    for path in [
+      "/usr/share/git-core/templates",
+      "/usr/local/share/git-core/templates",
+      "/Library/Developer/CommandLineTools/usr/share/git-core/templates",
+      "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/templates",
+    ] {
       let u = URL(fileURLWithPath: path, isDirectory: true)
       if FileManager.default.fileExists(atPath: u.appendingPathComponent("description").path) {
         return u

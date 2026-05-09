@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import Subprocess
+import System
 
 @testable import Sit
 
@@ -7,28 +9,26 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 struct SitCLIProcessTests: ~Copyable {
   /// `sit init` should produce the same `.git` tree as `git init -b <branch>` when templates match.
-  @Test func sitInitProcessMatchesGitInitLayout() throws {
-    guard let git = Self.gitPath() else {
+  @Test func sitInitProcessMatchesGitInitLayout() async throws {
+    guard let gitPath = Self.gitPath() else {
       Issue.record("skip: git not found on PATH")
       return
     }
-    guard let sit = Self.sitExecutableURL() else {
-      Issue.record(
-        "skip: could not find built `sit` (set SIT_BINARY or run swift test from the package root)"
-      )
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit` (set SIT_BINARY or run swift test from the package root)")
       return
     }
     _ = try GitInit.discoverTemplateDirectory()
-    try TempDirectory.withRemoval { root in
+    try await TempDirectory.withRemoval { root in
       let gitWork = root.appendingPathComponent("from-git", isDirectory: true)
       let sitWork = root.appendingPathComponent("from-sit", isDirectory: true)
       try FileManager.default.createDirectory(at: gitWork, withIntermediateDirectories: true)
       try FileManager.default.createDirectory(at: sitWork, withIntermediateDirectories: true)
-      #expect(try Self.runGit(git, cwd: gitWork, arguments: ["init", "-b", "main"]) == 0)
-      let (code, _, stderr) = try Self.runProcess(
-        executable: sit, cwd: sitWork, arguments: ["init", "-b", "main"])
+      #expect(try await Self.runGitQuiet(gitPath, arguments: ["-C", gitWork.path, "init", "-b", "main"]) == 0)
+      let (code, _, stderr) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: sitWork, arguments: ["init", "-b", "main"])
       #expect(code == 0, "sit init failed: \(stderr)")
-      let diff = try Self.runDiffQr(
+      let diff = try await Self.runDiffQr(
         gitWork.appendingPathComponent(".git").path,
         sitWork.appendingPathComponent(".git").path
       )
@@ -36,28 +36,24 @@ struct SitCLIProcessTests: ~Copyable {
     }
   }
 
-  /// `sit init -b main <dir>` from a parent directory matches `git init` in the same relative layout.
-  @Test func sitInitWithDirectoryArgumentMatchesGit() throws {
-    guard let git = Self.gitPath() else {
+  @Test func sitInitWithDirectoryArgumentMatchesGit() async throws {
+    guard let gitPath = Self.gitPath() else {
       Issue.record("skip: git not found on PATH")
       return
     }
-    guard let sit = Self.sitExecutableURL() else {
+    guard let sitURL = Self.sitExecutableURL() else {
       Issue.record("skip: could not find built `sit`")
       return
     }
     _ = try GitInit.discoverTemplateDirectory()
-    try TempDirectory.withRemoval { root in
-      let (codeG, _, _) = try Self.runProcessCapturing(
-        executable: URL(fileURLWithPath: git),
-        cwd: root,
-        arguments: ["-C", root.path, "init", "-b", "main", "gdir"]
-      )
+    try await TempDirectory.withRemoval { root in
+      let (codeG, _, _) = try await Self.runCapturing(
+        executable: gitPath, arguments: ["-C", root.path, "init", "-b", "main", "gdir"])
       #expect(codeG == 0)
-      let (codeS, _, errS) = try Self.runProcess(
-        executable: sit, cwd: root, arguments: ["init", "-b", "main", "sdir"])
+      let (codeS, _, errS) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: root, arguments: ["init", "-b", "main", "sdir"])
       #expect(codeS == 0, "sit init sdir: \(errS)")
-      let diff = try Self.runDiffQr(
+      let diff = try await Self.runDiffQr(
         root.appendingPathComponent("gdir/.git").path,
         root.appendingPathComponent("sdir/.git").path
       )
@@ -65,51 +61,54 @@ struct SitCLIProcessTests: ~Copyable {
     }
   }
 
-  @Test func sitInitSecondInvocationFails() throws {
-    guard let sit = Self.sitExecutableURL() else {
+  @Test func sitInitSecondInvocationFails() async throws {
+    guard let sitURL = Self.sitExecutableURL() else {
       Issue.record("skip: could not find built `sit`")
       return
     }
-    try TempDirectory.withRemoval { root in
+    try await TempDirectory.withRemoval { root in
       let work = root.appendingPathComponent("repo", isDirectory: true)
       try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-      let (first, _, e1) = try Self.runProcess(executable: sit, cwd: work, arguments: ["init", "-b", "main"])
+      let (first, _, e1) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
       #expect(first == 0, "first sit init: \(e1)")
-      let (second, _, _) = try Self.runProcess(executable: sit, cwd: work, arguments: ["init", "-b", "main"])
+      let (second, _, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
       #expect(second != 0)
     }
   }
 
-  /// `sit push` / `sit pull` delegate to `git` with the same exit status (no remote in a fresh repo).
-  @Test func sitPushAndPullMatchGitExitCodes() throws {
-    guard let git = Self.gitPath() else {
+  @Test func sitPushAndPullMatchGitExitCodes() async throws {
+    guard let gitPath = Self.gitPath() else {
       Issue.record("skip: git not found on PATH")
       return
     }
-    guard let sit = Self.sitExecutableURL() else {
+    guard let sitURL = Self.sitExecutableURL() else {
       Issue.record("skip: could not find built `sit`")
       return
     }
-    try TempDirectory.withRemoval { root in
+    try await TempDirectory.withRemoval { root in
       let work = root.appendingPathComponent("repo", isDirectory: true)
       try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-      let (initCode, _, errInit) = try Self.runProcess(
-        executable: sit, cwd: work, arguments: ["init", "-b", "main"])
+      let (initCode, _, errInit) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
       #expect(initCode == 0, "sit init: \(errInit)")
-      let gitURL = URL(fileURLWithPath: git)
-      let (codeSitPush, _, _) = try Self.runProcess(executable: sit, cwd: work, arguments: ["push"])
-      let (codeGitPush, _, _) = try Self.runProcess(executable: gitURL, cwd: work, arguments: ["push"])
+
+      let codeSitPush = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["push"])
+      let codeGitPush = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "push"])
       #expect(codeSitPush == codeGitPush)
-      let (codeSitPull, _, _) = try Self.runProcess(executable: sit, cwd: work, arguments: ["pull"])
-      let (codeGitPull, _, _) = try Self.runProcess(executable: gitURL, cwd: work, arguments: ["pull"])
+
+      let codeSitPull = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["pull"])
+      let codeGitPull = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "pull"])
       #expect(codeSitPull == codeGitPull)
-      let (codeSitPushArg, _, _) = try Self.runProcess(
-        executable: sit, cwd: work, arguments: ["push", "--dry-run", "nope", "main"])
-      let (codeGitPushArg, _, _) = try Self.runProcess(
-        executable: gitURL, cwd: work, arguments: ["push", "--dry-run", "nope", "main"])
+
+      let codeSitPushArg = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["push", "--dry-run", "nope", "main"])
+      let codeGitPushArg = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "push", "--dry-run", "nope", "main"])
       #expect(codeSitPushArg == codeGitPushArg)
     }
   }
+
+  // MARK: - Helpers
 
   private static func packageRootURL() -> URL? {
     let fm = FileManager.default
@@ -125,7 +124,6 @@ struct SitCLIProcessTests: ~Copyable {
     return nil
   }
 
-  /// Prefer `SIT_BINARY` when set (absolute path to the `sit` executable).
   private static func sitExecutableURL() -> URL? {
     let fm = FileManager.default
     if let raw = ProcessInfo.processInfo.environment["SIT_BINARY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -162,57 +160,70 @@ struct SitCLIProcessTests: ~Copyable {
     return nil
   }
 
-  private static func devNullForWriting() -> FileHandle {
-    try! FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
+  /// Runs a process, discards output, returns 0 or 1.
+  private static func runQuiet(executable: String, arguments: [String]) async throws -> Int32 {
+    let record = try await Subprocess.run(
+      .name(executable),
+      arguments: Arguments(arguments),
+      output: .discarded,
+      error: .discarded
+    )
+    return record.terminationStatus.isSuccess ? 0 : 1
   }
 
-  private static func runGit(_ git: String, cwd: URL, arguments: [String]) throws -> Int32 {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: git)
-    p.arguments = ["-C", cwd.path] + arguments
-    p.standardOutput = Self.devNullForWriting()
-    p.standardError = Self.devNullForWriting()
-    try p.run()
-    p.waitUntilExit()
-    return p.terminationStatus
+  /// Runs git, discards output, returns 0 or 1.
+  private static func runGitQuiet(_ git: String, arguments: [String]) async throws -> Int32 {
+    try await runQuiet(executable: git, arguments: arguments)
   }
 
-  private static func runProcess(executable: URL, cwd: URL, arguments: [String]) throws -> (
+  /// Runs `sit` with a working directory (sit doesn't understand -C).
+  private static func runSitQuiet(executable: String, workingDirectory: URL, arguments: [String]) async throws -> Int32 {
+    let record = try await Subprocess.run(
+      .name(executable),
+      arguments: Arguments(arguments),
+      workingDirectory: FilePath(platformString: workingDirectory.path),
+      output: .discarded,
+      error: .discarded
+    )
+    return record.terminationStatus.isSuccess ? 0 : 1
+  }
+
+  /// Runs `sit` with a working directory, captures stdout and stderr.
+  private static func runSit(executable: String, workingDirectory: URL, arguments: [String]) async throws -> (
     code: Int32, stdout: String, stderr: String
   ) {
-    try runProcessCapturing(executable: executable, cwd: cwd, arguments: arguments)
-  }
-
-  private static func runProcessCapturing(executable: URL, cwd: URL, arguments: [String]) throws -> (
-    code: Int32, stdout: String, stderr: String
-  ) {
-    let p = Process()
-    p.executableURL = executable
-    p.arguments = arguments
-    p.currentDirectoryURL = cwd
-    let outPipe = Pipe()
-    let errPipe = Pipe()
-    p.standardOutput = outPipe
-    p.standardError = errPipe
-    try p.run()
-    let outData = try outPipe.fileHandleForReading.readToEnd() ?? Data()
-    let errData = try errPipe.fileHandleForReading.readToEnd() ?? Data()
-    p.waitUntilExit()
+    let record = try await Subprocess.run(
+      .name(executable),
+      arguments: Arguments(arguments),
+      workingDirectory: FilePath(platformString: workingDirectory.path),
+      output: .string(limit: Int.max),
+      error: .string(limit: Int.max)
+    )
     return (
-      p.terminationStatus,
-      String(decoding: outData, as: UTF8.self),
-      String(decoding: errData, as: UTF8.self)
+      record.terminationStatus.isSuccess ? 0 : 1,
+      record.standardOutput ?? "",
+      record.standardError ?? ""
     )
   }
 
-  private static func runDiffQr(_ path1: String, _ path2: String) throws -> Int32 {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/diff")
-    p.arguments = ["-qr", path1, path2]
-    p.standardOutput = Self.devNullForWriting()
-    p.standardError = Self.devNullForWriting()
-    try p.run()
-    p.waitUntilExit()
-    return p.terminationStatus
+  /// Runs a process, captures stdout and stderr.
+  private static func runCapturing(executable: String, arguments: [String]) async throws -> (
+    code: Int32, stdout: String, stderr: String
+  ) {
+    let record = try await Subprocess.run(
+      .name(executable),
+      arguments: Arguments(arguments),
+      output: .string(limit: Int.max),
+      error: .string(limit: Int.max)
+    )
+    return (
+      record.terminationStatus.isSuccess ? 0 : 1,
+      record.standardOutput ?? "",
+      record.standardError ?? ""
+    )
+  }
+
+  private static func runDiffQr(_ path1: String, _ path2: String) async throws -> Int32 {
+    try await runQuiet(executable: "/usr/bin/diff", arguments: ["-qr", path1, path2])
   }
 }
