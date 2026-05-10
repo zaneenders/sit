@@ -1,5 +1,7 @@
 # Sit
 
+⚠️ This is heavily written by Ai. Probably just use git instead.
+
 Swift library and small CLI for working with on-disk Git repositories: loose objects, pack indexes, zlib, a compatible index (v2/v3), and basic init/refs/commit flows.
 
 Requires **Swift 6.3** or newer.
