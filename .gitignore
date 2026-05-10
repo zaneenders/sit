@@ -5,3 +5,5 @@
 .DS_Store
 # Swift Package Manger
 /.swiftpm
+# Benchmark temp output
+/tmp/sit-bench-*.json
