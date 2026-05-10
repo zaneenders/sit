@@ -1,0 +1,7 @@
+.env
+# Build artifacts
+/.build
+# Annoying Mac File
+.DS_Store
+# Swift Package Manger
+/.swiftpm
