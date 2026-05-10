@@ -13,6 +13,7 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
     .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
     .package(url: "https://github.com/apple/swift-system.git", from: "1.4.0"),
+    .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
   ],
   targets: [
     .target(
@@ -30,6 +31,7 @@ let package = Package(
       dependencies: [
         .target(name: "Sit"),
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
+        .product(name: "AsyncHTTPClient", package: "async-http-client"),
       ],
       path: "Sources/sit-cli",
       swiftSettings: [
