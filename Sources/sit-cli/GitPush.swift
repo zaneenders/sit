@@ -14,6 +14,43 @@ enum GitPush {
     case pushRejected(String)
   }
 
+  // MARK: - URL conversion
+
+  /// Detect SSH Git URLs and return the parsed SSH URL, or `nil` for HTTP(S) URLs.
+  private static func detectSSH(_ url: String) -> GitSSHTransport.SSHURL? {
+    GitSSHTransport.parseSSHURL(url)
+  }
+
+  /// Convert SSH-style Git URLs to HTTPS so `async-http-client` can handle them.
+  /// - `git@github.com:user/repo.git` → `https://github.com/user/repo.git`
+  /// - `ssh://git@github.com/user/repo.git` → `https://github.com/user/repo.git`
+  /// - `https://…` / `http://…` → returned unchanged
+  private static func convertToHTTPURL(_ url: String) -> String {
+    // Already HTTP(S)
+    if url.hasPrefix("https://") || url.hasPrefix("http://") {
+      return url
+    }
+    // ssh://git@host/path → https://host/path
+    if url.hasPrefix("ssh://") {
+      let rest = String(url.dropFirst(6))
+      let noUser = rest.replacingOccurrences(of: "git@", with: "")
+      return "https://\(noUser)"
+    }
+    // git@host:path → https://host/path
+    if url.hasPrefix("git@") {
+      let rest = String(url.dropFirst(4))
+      let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+      if parts.count == 2 {
+        return "https://\(parts[0])/\(parts[1])"
+      }
+    }
+    // Fallback: assume it needs https://
+    if !url.contains("://") {
+      return "https://\(url)"
+    }
+    return url
+  }
+
   // MARK: - Public entry point
 
   /// Push the current branch to its configured upstream remote (or `remoteName`
@@ -40,8 +77,8 @@ enum GitPush {
       throw Error.noUpstreamConfigured(branch)
     }
 
-    let url = dest.remote.resolvedPushURL
-    guard !url.isEmpty else { throw Error.noRemoteURL }
+    let rawURL = dest.remote.resolvedPushURL
+    guard !rawURL.isEmpty else { throw Error.noRemoteURL }
 
     let pushRefspecs = refspecs.isEmpty ? dest.refspecs : refspecs
 
@@ -50,8 +87,17 @@ enum GitPush {
       throw Error.unbornBranch(branch)
     }
 
-    // 4. Discover remote refs
-    let advert = try await GitSmartHTTP.advertiseRefs(url: url)
+    // 4. Discover remote refs (dispatch on transport)
+    let advert: GitSmartHTTP.RefAdvertisement
+    let displayURL: String
+
+    if let ssh = detectSSH(rawURL) {
+      displayURL = "git@\(ssh.host):\(ssh.path)"
+      advert = try await GitSSHTransport.advertiseRefs(ssh: ssh)
+    } else {
+      displayURL = convertToHTTPURL(rawURL)
+      advert = try await GitSmartHTTP.advertiseRefs(url: displayURL)
+    }
 
     // 5. Resolve refspecs into (remote ref, our SHA, remote SHA) triples
     var refUpdates: [(oldSha40: String, newSha40: String, refName: String)] = []
@@ -77,12 +123,21 @@ enum GitPush {
 
     let packResult = try GitPackWriter.write(objects: objects)
 
-    // 7. Send to remote
-    let results = try await GitSmartHTTP.push(
-      url: url,
-      refUpdates: refUpdates,
-      packData: packResult.packData,
-      capabilities: advert.capabilities)
+    // 7. Send to remote (dispatch on transport)
+    let results: [String]
+    if let ssh = detectSSH(rawURL) {
+      results = try await GitSSHTransport.push(
+        ssh: ssh,
+        refUpdates: refUpdates,
+        packData: packResult.packData,
+        capabilities: advert.capabilities)
+    } else {
+      results = try await GitSmartHTTP.push(
+        url: convertToHTTPURL(rawURL),
+        refUpdates: refUpdates,
+        packData: packResult.packData,
+        capabilities: advert.capabilities)
+    }
 
     // 8. Report results
     var ok = true
@@ -102,7 +157,7 @@ enum GitPush {
         gitDir: gitDir, refName: trackingRef, sha40HexLower: update.newSha40)
     }
 
-    print("Pushed \(branch) to \(dest.remote.name) (\(url))")
+    print("Pushed \(branch) to \(dest.remote.name) (\(displayURL))")
   }
 
   // MARK: - Refspec parsing
