@@ -6,15 +6,6 @@
 /// zlib compression uses DeflateCompress (Huffman-coded DEFLATE).
 public enum GitPackWriter: Sendable {
 
-  // MARK: - Pack object type constants
-
-  private static let OBJ_COMMIT = 1
-  private static let OBJ_TREE = 2
-  private static let OBJ_BLOB = 3
-  private static let OBJ_TAG = 4
-
-  // MARK: - Public data types
-
   /// An object ready to be packed.
   public struct PackObject: Sendable {
     /// 20-byte SHA-1

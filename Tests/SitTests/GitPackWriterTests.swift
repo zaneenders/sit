@@ -100,6 +100,20 @@ struct GitPackWriterTests: ~Copyable {
     #expect(Array(gotPayload) == treePayload)
   }
 
+  @Test func writeLargeBlobRoundTrips() throws {
+    // Large enough to need 3+ bytes in the pack object header (size >= 2048)
+    let payload = [UInt8](repeating: 0x42, count: 5000)
+    let sha20 = GitSHA1.digest(
+      of: Array("blob 5000".utf8) + [0] + payload)
+
+    let obj = GitPackWriter.PackObject(sha20: sha20, type: 3, payload: payload)
+    let result = try GitPackWriter.write(objects: [obj])
+
+    let pack = try GitPack(packBytes: result.packData, indexBytes: result.indexData)
+    let got = try pack.serializedObject(sha20: sha20)
+    #expect(Array(got) == payload)
+  }
+
   // MARK: - Index validation
 
   @Test func indexEntriesSortedBySHA() throws {
