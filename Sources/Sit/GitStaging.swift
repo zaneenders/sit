@@ -1,4 +1,5 @@
 public import Foundation
+import SystemPackage
 
 public enum GitStaging: Sendable {
   /// Create a commit from the current `.git/index`, update `HEAD`'s branch ref (or detached `HEAD`), return commit id hex.
@@ -46,7 +47,9 @@ public enum GitStaging: Sendable {
     case .symbolic(let ref):
       try GitRefs.updateRef(gitDir: gitDir, refName: ref, sha40HexLower: commitHex)
     case .detached:
-      try Data("\(commitHex)\n".utf8).write(to: gitDir.appendingPathComponent("HEAD"))
+      let headURL = gitDir.appendingPathComponent("HEAD")
+      let content = Array("\(commitHex)\n".utf8)
+      try GitAtomicWrite.write(content, to: FilePath(headURL.path))
     }
     return commitHex
   }

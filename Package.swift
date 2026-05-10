@@ -12,12 +12,14 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-crypto.git", from: "3.8.0"),
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
     .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
+    .package(url: "https://github.com/apple/swift-system.git", from: "1.4.0"),
   ],
   targets: [
     .target(
       name: "Sit",
       dependencies: [
-        .product(name: "Crypto", package: "swift-crypto")
+        .product(name: "Crypto", package: "swift-crypto"),
+        .product(name: "SystemPackage", package: "swift-system"),
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),

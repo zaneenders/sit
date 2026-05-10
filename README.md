@@ -50,22 +50,42 @@ Some integration tests call **`git`** and **`python3`** on `PATH` and skip if th
 
 ### Code coverage
 
-Run the suite with LLVM profiling enabled, then summarize with **`llvm-cov`** (ships with the Swift toolchain):
+Run the suite with LLVM profiling enabled, then summarize with **`llvm-cov`** (ships with the Swift toolchain).
 
+**macOS**
 ```bash
 swift test --enable-code-coverage
-
-# Linux example — adjust the `.build/<triple>/debug` prefix for your host.
-PROF=.build/x86_64-unknown-linux-gnu/debug/codecov/default.profdata
-BIN=.build/x86_64-unknown-linux-gnu/debug/sitPackageTests.xctest
-
-llvm-cov report "$BIN" -instr-profile="$PROF"
-
-# Library-only-ish view (drop tests, CLI, and generated harness noise):
-llvm-cov report "$BIN" -instr-profile="$PROF" \
-  --ignore-filename-regex='Tests/' \
-  --ignore-filename-regex='sit-cli' \
-  --ignore-filename-regex='derived'
+PROFDATA=$(find .build -name '*.profdata' -print -quit)
+BIN=$(find .build -name 'sitPackageTests' -type f -not -path '*.dSYM*' -print -quit)
+xcrun llvm-cov report "$BIN" \
+  --instr-profile="$PROFDATA" \
+  --ignore-filename-regex='\.build/'
 ```
 
-HTML (optional): `llvm-cov show "$BIN" -instr-profile="$PROF" -format=html -output-dir=coverage-html` then open **`coverage-html/index.html`** in a browser.
+**Linux**
+```bash
+swift test --enable-code-coverage
+PROFDATA=$(find .build -name '*.profdata' -print -quit)
+BIN=$(find .build -name 'sitPackageTests.xctest' -type f -print -quit)
+llvm-cov report "$BIN" \
+  --instr-profile="$PROFDATA" \
+  --ignore-filename-regex='\.build/'
+```
+
+Library-only view (drop tests, CLI, and generated harness noise):
+```bash
+llvm-cov report "$BIN" \
+  --instr-profile="$PROFDATA" \
+  --ignore-filename-regex='Tests/' \
+  --ignore-filename-regex='sit-cli' \
+  --ignore-filename-regex='\.build/'
+```
+
+HTML (optional):
+```bash
+llvm-cov show "$BIN" \
+  --instr-profile="$PROFDATA" \
+  -format=html \
+  -output-dir=coverage-html
+```
+Then open **`coverage-html/index.html`** in a browser.

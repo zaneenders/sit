@@ -1,4 +1,5 @@
 public import Foundation
+import SystemPackage
 
 public enum GitRefs {
   /// Write `refs/<refName>` to `40-hex + LF` (e.g. `refs/heads/main`).
@@ -6,7 +7,8 @@ public enum GitRefs {
     guard sha40HexLower.count == 40 else { throw GitObjectWriterError.badHexSha }
     let url = gitDir.appendingPathComponent(refName)
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try Data("\(sha40HexLower)\n".utf8).write(to: url)
+    let content = Array("\(sha40HexLower)\n".utf8)
+    try GitAtomicWrite.write(content, to: FilePath(url.path))
   }
 
   /// Reads `40` lowercase hex bytes from `refName` (e.g. `refs/heads/main`), or `nil` if missing.
