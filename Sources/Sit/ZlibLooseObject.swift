@@ -2,12 +2,12 @@
 
 public enum ZlibLooseObject {
   /// Compress to a zlib stream (RFC 1950: CMF+FLG + DEFLATE + Adler32).
-  /// Uses stored-only DEFLATE blocks (always valid; larger than zlib’s default).
+  /// Uses Huffman-coded DEFLATE blocks (best of fixed + dynamic).
   public static func compress(
     _ plain: [UInt8],
     maxPlainSize: Int = 64 << 20
   ) throws -> ContiguousArray<UInt8> {
-    let deflateBytes = try DeflateCompress.compressStored(plain, maxPlainSize: maxPlainSize)
+    let deflateBytes = try DeflateCompress.compress(plain, maxPlainSize: maxPlainSize)
     let (cmf, flg) = (zlibCMF, zlibFLG)
     var out: [UInt8] = []
     out.reserveCapacity(2 + deflateBytes.count + 4)
