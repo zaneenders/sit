@@ -1,4 +1,4 @@
-import Foundation
+import Subprocess
 import Sit
 
 /// Git smart protocol over SSH transport.
@@ -126,46 +126,37 @@ enum GitSSHTransport {
   /// Run `/usr/bin/ssh` with the given arguments, optionally feeding `input` to stdin.
   /// Returns all stdout bytes. Throws on non-zero exit.
   private static func runSSH(arguments: [String], input: [UInt8]?) async throws -> [UInt8] {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-    process.arguments = arguments
-
-    let stdoutPipe = Pipe()
-    let stderrPipe = Pipe()
-    process.standardOutput = stdoutPipe
-    process.standardError = stderrPipe
-
-    if input != nil {
-      let stdinPipe = Pipe()
-      process.standardInput = stdinPipe
-      try process.run()
-
-      // Write input and close stdin so the remote sees EOF after our pack
-      try stdinPipe.fileHandleForWriting.write(contentsOf: Data(input!))
-      try stdinPipe.fileHandleForWriting.close()
+    let record: ExecutionRecord<BytesOutput, BytesOutput>
+    if let input {
+      record = try await Subprocess.run(
+        .name("/usr/bin/ssh"),
+        arguments: Arguments(arguments),
+        input: .array(input),
+        output: .bytes(limit: 100 * 1024 * 1024),  // 100 MB
+        error: .bytes(limit: 65536))
     } else {
-      // No stdin — but git-receive-pack still expects input after advertisement.
-      // Close stdin immediately so the server sends advertisement and exits
-      // (which is fine for the advertisement-only call).
-      let stdinPipe = Pipe()
-      process.standardInput = stdinPipe
-      try process.run()
-      try stdinPipe.fileHandleForWriting.close()
+      record = try await Subprocess.run(
+        .name("/usr/bin/ssh"),
+        arguments: Arguments(arguments),
+        output: .bytes(limit: 100 * 1024 * 1024),
+        error: .bytes(limit: 65536))
     }
 
-    let stdoutData = try await stdoutPipe.fileHandleForReading.readToEndAsync()
-    let stderrData = try await stderrPipe.fileHandleForReading.readToEndAsync()
-
-    process.waitUntilExit()
-
-    guard process.terminationStatus == 0 else {
-      let errStr = stderrData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    guard record.terminationStatus.isSuccess else {
+      let errStr = String(decoding: record.standardError, as: UTF8.self)
       throw GitSSHError.sshFailed(
-        exitCode: process.terminationStatus,
-        stderr: errStr.trimmingCharacters(in: .whitespacesAndNewlines))
+        exitCode: sshExitCode(record.terminationStatus),
+        stderr: String(errStr.trimming { $0.isWhitespace || $0.isNewline }))
     }
 
-    return Array(stdoutData ?? Data())
+    return record.standardOutput
+  }
+
+  private static func sshExitCode(_ status: TerminationStatus) -> Int32 {
+    switch status {
+    case .exited(let code): return code
+    case .signaled(let sig): return -sig
+    }
   }
 }
 
@@ -174,19 +165,4 @@ enum GitSSHTransport {
 enum GitSSHError: Error, Equatable {
   case sshFailed(exitCode: Int32, stderr: String)
   case badSSHURL(String)
-}
-
-// MARK: - Async FileHandle reading
-
-extension FileHandle {
-  fileprivate func readToEndAsync() async throws -> Data? {
-    try await withCheckedThrowingContinuation { continuation in
-      do {
-        let data = try self.readToEnd()
-        continuation.resume(returning: data)
-      } catch {
-        continuation.resume(throwing: error)
-      }
-    }
-  }
 }

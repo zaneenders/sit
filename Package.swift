@@ -32,6 +32,7 @@ let package = Package(
         .target(name: "Sit"),
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
         .product(name: "AsyncHTTPClient", package: "async-http-client"),
+        .product(name: "Subprocess", package: "swift-subprocess"),
       ],
       path: "Sources/sit-cli",
       swiftSettings: [
