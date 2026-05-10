@@ -41,6 +41,7 @@ let package = Package(
         .byName(name: "Sit"),
         .target(name: "sit-cli"),
         .product(name: "Subprocess", package: "swift-subprocess"),
+        .product(name: "SystemPackage", package: "swift-system"),
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes")

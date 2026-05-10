@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import Subprocess
-import System
+import SystemPackage
 
 @testable import Sit
 
