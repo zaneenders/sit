@@ -3,7 +3,7 @@ import Foundation
 import Sit
 
 @main
-struct SitCommand: ParsableCommand {
+struct SitCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "sit",
     abstract: "Initialize a repo, stage files, show status, and create commits in a Git-compatible layout.",
@@ -254,24 +254,33 @@ private enum SitGitPassthrough {
   }
 }
 
-struct SitPush: ParsableCommand {
+struct SitPush: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "push",
-    abstract: "Run git push (Sit does not implement network transfer; use in normal clones)."
+    abstract: "Push the current branch to its upstream remote using native smart HTTP."
   )
 
-  @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git push.")
-  var gitArguments: [String] = []
+  @Argument(help: "Remote name (default: upstream remote for the current branch).")
+  var remote: String?
 
-  mutating func run() throws {
-    try SitGitPassthrough.run(subcommand: "push", gitArguments: gitArguments)
+  @Argument(help: "Refspecs to push (default: push the current branch to the matching remote ref).")
+  var refspecs: [String] = []
+
+  mutating func run() async throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
+    try await GitPush.push(
+      gitDir: gitDir,
+      workTree: workTree,
+      remoteName: remote,
+      refspecs: refspecs)
   }
 }
 
 struct SitPull: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "pull",
-    abstract: "Run git pull (Sit does not implement network transfer; use in normal clones)."
+    abstract: "Fetch from and integrate with another repository (passthrough to git; native fetch not yet implemented)."
   )
 
   @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git pull.")

@@ -78,7 +78,26 @@ struct SitCLIProcessTests: ~Copyable {
     }
   }
 
-  @Test func sitPushAndPullMatchGitExitCodes() async throws {
+  @Test func sitPushFailsWithoutUpstream() async throws {
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try await TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+      let (initCode, _, errInit) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0, "sit init: \(errInit)")
+
+      // Native push should fail (non-zero) when no upstream remote is configured
+      let codeSitPush = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["push"])
+      #expect(codeSitPush != 0, "sit push without remote should fail")
+    }
+  }
+
+  @Test func sitPullStillPassthroughToGit() async throws {
     guard let gitPath = Self.gitPath() else {
       Issue.record("skip: git not found on PATH")
       return
@@ -94,17 +113,12 @@ struct SitCLIProcessTests: ~Copyable {
         executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
       #expect(initCode == 0, "sit init: \(errInit)")
 
-      let codeSitPush = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["push"])
-      let codeGitPush = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "push"])
-      #expect(codeSitPush == codeGitPush)
-
-      let codeSitPull = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["pull"])
-      let codeGitPull = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "pull"])
+      // Pull is still a passthrough to git
+      let codeSitPull = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["pull"])
+      let codeGitPull = try await Self.runQuiet(
+        executable: gitPath, arguments: ["-C", work.path, "pull"])
       #expect(codeSitPull == codeGitPull)
-
-      let codeSitPushArg = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["push", "--dry-run", "nope", "main"])
-      let codeGitPushArg = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "push", "--dry-run", "nope", "main"])
-      #expect(codeSitPushArg == codeGitPushArg)
     }
   }
 
