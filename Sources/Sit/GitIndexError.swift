@@ -11,7 +11,6 @@ public enum GitIndexError: Error, Equatable, Sendable {
   case duplicatePathInIndex(String)
   case fileAndDirectoryConflict(String)
   case emptyIndex
-  case headUnrecognized(String)
   case missingUserIdentity
   case cannotReadFile(String)
 }

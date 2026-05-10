@@ -14,7 +14,10 @@ public enum GitRepository: Sendable {
     }
     let fm = FileManager.default
     let start = cur.path
-    for _ in 0..<256 {
+    /// Climb at most 256 levels (far deeper than any real filesystem hierarchy;
+    /// the limit exists to prevent infinite loops on pathological mount setups).
+    let maxDepth = 256
+    for _ in 0..<maxDepth {
       let dotGit = cur.appendingPathComponent(".git", isDirectory: false)
       if fm.fileExists(atPath: dotGit.path) {
         var isDir: ObjCBool = false

@@ -1,5 +1,9 @@
 public import Foundation
 
+public enum GitHEADError: Error, Equatable, Sendable {
+  case unrecognized(String)
+}
+
 public enum GitHEAD: Sendable {
   public enum Kind: Equatable, Sendable {
     case symbolic(String)
@@ -11,10 +15,10 @@ public enum GitHEAD: Sendable {
       .trimmingCharacters(in: .whitespacesAndNewlines)
     if raw.hasPrefix("ref: ") {
       let ref = String(raw.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !ref.isEmpty else { throw GitIndexError.headUnrecognized(raw) }
+      guard !ref.isEmpty else { throw GitHEADError.unrecognized(raw) }
       return .symbolic(ref)
     }
-    guard raw.count == 40 else { throw GitIndexError.headUnrecognized(raw) }
+    guard raw.count == 40 else { throw GitHEADError.unrecognized(raw) }
     let lower = raw.lowercased()
     _ = try GitHex.decode20(lower)
     return .detached(lower)

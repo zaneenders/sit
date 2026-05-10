@@ -8,7 +8,7 @@ public enum ZlibLooseObject {
     maxPlainSize: Int = 64 << 20
   ) throws -> ContiguousArray<UInt8> {
     let deflateBytes = try DeflateCompress.compressStored(plain, maxPlainSize: maxPlainSize)
-    let (cmf, flg) = Self.zlibHeaderPair()
+    let (cmf, flg) = (zlibCMF, zlibFLG)
     var out: [UInt8] = []
     out.reserveCapacity(2 + deflateBytes.count + 4)
     out.append(cmf)
@@ -22,17 +22,11 @@ public enum ZlibLooseObject {
     return ContiguousArray(out)
   }
 
-  /// First `(CMF, FLG)` pair with `CMF == 0x78` and valid FCHECK (RFC 1950 §2.2).
-  private static func zlibHeaderPair() -> (UInt8, UInt8) {
-    let cmf: UInt8 = 0x78
-    for flg in 0..<256 {
-      let check = UInt16(cmf) * 256 + UInt16(flg)
-      if check % 31 == 0 {
-        return (cmf, UInt8(truncatingIfNeeded: flg))
-      }
-    }
-    fatalError("no FCHECK for CMF 0x78")
-  }
+  /// CMF + FLG for windowBits=15 (32K), default compression level.
+  /// CMF=0x78 → CM=8 (deflate), CINFO=7 (32K window).
+  /// FLG=0x9C → FLEVEL=2 (default algo), FDICT=0, FCHECK=28 ((0x7800+0x9C) % 31 == 0).
+  private static let zlibCMF: UInt8 = 0x78
+  private static let zlibFLG: UInt8 = 0x9C
 
   /// Decompress a zlib stream (CMF+FLG + deflate + Adler32) to raw bytes.
   public static func decompress(
@@ -42,7 +36,7 @@ public enum ZlibLooseObject {
     guard bytes.count >= 6 else {
       throw InflateError.truncatedZlib
     }
-    _ = try LZ77.Header(parsingCompressedBytes: bytes)
+    _ = try ZlibHeader.Header(parsingCompressedBytes: bytes)
     let deflateSlice = Array(bytes[2..<(bytes.count - 4)])
     let plain = try DeflateInflate.inflate(deflateSlice, maxOutputSize: maxOutputSize)
     let stored = UInt32(bytes[bytes.count - 4]) << 24
@@ -67,7 +61,7 @@ public enum ZlibLooseObject {
       throw InflateError.truncatedZlib
     }
     let tail = Array(bytes[start...])
-    _ = try LZ77.Header(parsingCompressedBytes: tail)
+    _ = try ZlibHeader.Header(parsingCompressedBytes: tail)
     let afterHeader = Array(bytes[(start + 2)...])
     let (plain, defConsumed) = try DeflateInflate.inflateAllowTrailing(
       afterHeader,

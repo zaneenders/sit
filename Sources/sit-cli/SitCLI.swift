@@ -227,6 +227,9 @@ struct SitStatus: ParsableCommand {
 
 /// Run `git <subcommand>` with extra args; inherits stdin/stdout/stderr like running git directly.
 private enum SitGitPassthrough {
+  /// Maximum time (seconds) to wait for a `git` subprocess before killing it.
+  private static let timeoutSeconds: Int = 300
+
   static func run(subcommand: String, gitArguments: [String]) throws {
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     _ = try GitRepository.discover(from: cwd)
@@ -235,7 +238,17 @@ private enum SitGitPassthrough {
     p.arguments = ["git", subcommand] + gitArguments
     p.currentDirectoryURL = cwd
     try p.run()
+
+    let timer = DispatchSource.makeTimerSource()
+    timer.schedule(deadline: .now() + .seconds(timeoutSeconds))
+    timer.setEventHandler {
+      p.terminate()
+    }
+    timer.resume()
+
     p.waitUntilExit()
+    timer.cancel()
+
     let status = p.terminationStatus
     guard status == 0 else { throw ExitCode(status) }
   }

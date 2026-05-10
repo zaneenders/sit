@@ -71,7 +71,7 @@ struct GitErrorAndStagingEdgeTests: ~Copyable {
       try index.write(to: gitDir.appendingPathComponent("index"))
       try "garbage-head\n".write(to: gitDir.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
       let author = GitLocalConfig.UserIdentity(name: "t", email: "t@t")
-      #expect(throws: GitIndexError.headUnrecognized("garbage-head")) {
+      #expect(throws: GitHEADError.unrecognized("garbage-head")) {
         try GitStaging.commit(
           gitDir: gitDir,
           workTree: work,

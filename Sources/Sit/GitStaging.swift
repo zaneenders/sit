@@ -1,14 +1,17 @@
 public import Foundation
 
 public enum GitStaging: Sendable {
-  /// Create a commit from the current `.git/index`, update `HEAD`’s branch ref (or detached `HEAD`), return commit id hex.
+  /// Create a commit from the current `.git/index`, update `HEAD`'s branch ref (or detached `HEAD`), return commit id hex.
+  /// `authorDate` and `committerDate` allow the two timestamps to differ (as real Git does);
+  /// when `committerDate` is `nil` it defaults to `authorDate`.
   public static func commit(
     gitDir: URL,
     workTree: URL,
     message: String,
     author: GitLocalConfig.UserIdentity,
     committer: GitLocalConfig.UserIdentity? = nil,
-    date: Date = Date()
+    authorDate: Date = Date(),
+    committerDate: Date? = nil
   ) throws -> String {
     let indexURL = gitDir.appendingPathComponent("index")
     let index: GitIndex
@@ -22,11 +25,14 @@ public enum GitStaging: Sendable {
     let treeHex = GitHex.encodeLower(treeSha)
     let parent = try GitHEAD.resolveCommitHex(gitDir: gitDir)
     let parents = parent.map { [$0] } ?? []
-    let tz = Self.gitTimezoneOffset(for: date)
-    let ts = Int64(date.timeIntervalSince1970)
-    let authorLine = "\(author.name) <\(author.email)> \(ts) \(tz)"
+    let authorTz = Self.gitTimezoneOffset(for: authorDate)
+    let authorTs = Int64(authorDate.timeIntervalSince1970)
+    let authorLine = "\(author.name) <\(author.email)> \(authorTs) \(authorTz)"
     let committerPerson = committer ?? author
-    let committerLine = "\(committerPerson.name) <\(committerPerson.email)> \(ts) \(tz)"
+    let cDate = committerDate ?? authorDate
+    let committerTz = Self.gitTimezoneOffset(for: cDate)
+    let committerTs = Int64(cDate.timeIntervalSince1970)
+    let committerLine = "\(committerPerson.name) <\(committerPerson.email)> \(committerTs) \(committerTz)"
     let commitSha = try GitLooseObjectWriter.writeCommit(
       gitDir: gitDir,
       treeSha40HexLower: treeHex,

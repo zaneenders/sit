@@ -1,6 +1,6 @@
 // Git binary delta apply (`patch_delta` in git’s patch-delta.c).
 
-enum PackDelta {
+package enum PackDelta {
   static func readDeltaHeaderSize(_ delta: [UInt8], pos: inout Int) throws -> Int {
     var size = 0
     var shift = 0
@@ -18,7 +18,7 @@ enum PackDelta {
   }
 
   /// Apply `delta` to `base` (both uncompressed). Returns the reconstructed object bytes.
-  static func apply(base: [UInt8], delta: [UInt8]) throws -> ContiguousArray<UInt8> {
+  package static func apply(base: [UInt8], delta: [UInt8]) throws -> ContiguousArray<UInt8> {
     guard delta.count >= 4 else { throw GitPackError.truncatedDelta }
     var p = 0
     let baseExpected = try readDeltaHeaderSize(delta, pos: &p)

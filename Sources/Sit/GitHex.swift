@@ -26,3 +26,9 @@ public enum GitHex: Sendable {
     return out
   }
 }
+
+/// Big-endian UInt32 from byte array at `offset` (no bounds check — caller must ensure).
+package func readBigEndianUInt32(_ bytes: [UInt8], _ offset: Int) -> UInt32 {
+  (UInt32(bytes[offset]) << 24) | (UInt32(bytes[offset + 1]) << 16)
+    | (UInt32(bytes[offset + 2]) << 8) | UInt32(bytes[offset + 3])
+}

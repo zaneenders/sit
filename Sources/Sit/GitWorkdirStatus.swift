@@ -103,6 +103,22 @@ public enum GitWorkdirStatusText: Sendable {
       }
       var isDir: ObjCBool = false
       guard fm.fileExists(atPath: abs.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+
+      /// Check index stat metadata first to avoid re-hashing files whose
+      /// mtime and size haven't changed since the last `sit add`.
+      if let stat = index.indexStat(for: path) {
+        let attrs = try fm.attributesOfItem(atPath: abs.path)
+        let diskMtime = (attrs[.modificationDate] as? Date) ?? Date()
+        let ts = diskMtime.timeIntervalSince1970
+        let diskMtimeSec = UInt32(truncatingIfNeeded: Int64(ts))
+        let diskMtimeNSec = UInt32(truncatingIfNeeded: Int64((ts - floor(ts)) * 1_000_000_000.0))
+        let diskSize = UInt32(truncatingIfNeeded: (attrs[.size] as? NSNumber)?.intValue ?? 0)
+        if stat.mtimeSec == diskMtimeSec && stat.mtimeNSec == diskMtimeNSec && stat.size == diskSize {
+          /// Stat matches — assume content hasn't changed (like `git status`).
+          continue
+        }
+      }
+
       let data = try Data(contentsOf: abs)
       let diskSha = GitLooseObjectWriter.blobSha1(content: Array(data))
       if diskSha != idxSha {

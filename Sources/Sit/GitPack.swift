@@ -56,9 +56,9 @@ public struct GitPack: Sendable {
     guard pack[0] == 0x50, pack[1] == 0x41, pack[2] == 0x43, pack[3] == 0x4b else {
       throw GitPackError.badPackSignature
     }
-    let ver = readBE32(pack, 4)
+    let ver = readBigEndianUInt32(pack, 4)
     guard ver == 2 else { throw GitPackError.unknownPackVersion(ver) }
-    return readBE32(pack, 8)
+    return readBigEndianUInt32(pack, 8)
   }
 
   // MARK: - Decode chain
@@ -178,8 +178,4 @@ public struct GitPack: Sendable {
     }
     return (type, size)
   }
-}
-
-private func readBE32(_ b: [UInt8], _ i: Int) -> UInt32 {
-  (UInt32(b[i]) << 24) | (UInt32(b[i + 1]) << 16) | (UInt32(b[i + 2]) << 8) | UInt32(b[i + 3])
 }

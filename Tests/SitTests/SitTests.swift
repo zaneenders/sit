@@ -174,11 +174,11 @@ struct SitTests: ~Copyable {
       0x78, 0x9c, 0x4b, 0xca, 0xc9, 0x4f, 0x52, 0x30, 0x65,
       0xc8, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x19, 0xaa, 0x04, 0x09,
     ]
-    let lz77 = try LZ77(parsingCompressedBytes: zlibBlob)
-    #expect(lz77.header.compressionMethod == 0x78)
-    #expect(lz77.header.flags == 0x9c)
-    #expect(lz77.firstBlockIsBFinal)
-    #expect(lz77.firstBlockType == .fixedCompression)
+    let zlibHeader = try ZlibHeader(parsingCompressedBytes: zlibBlob)
+    #expect(zlibHeader.header.compressionMethod == 0x78)
+    #expect(zlibHeader.header.flags == 0x9c)
+    #expect(zlibHeader.firstBlockIsBFinal)
+    #expect(zlibHeader.firstBlockType == .fixedCompression)
   }
 
   @Test func blockBegin() throws {
@@ -200,10 +200,10 @@ struct SitTests: ~Copyable {
     (isBFINAL, bType) = try Sit.blockBegin(value: 5)
     #expect(isBFINAL)
     #expect(bType == .dynamicCompression)
-    #expect(throws: LZ77Error.blockError("reserved BTYPE")) {
+    #expect(throws: ZlibHeaderError.blockError("reserved BTYPE")) {
       _ = try Sit.blockBegin(value: 6)
     }
-    #expect(throws: LZ77Error.blockError("reserved BTYPE")) {
+    #expect(throws: ZlibHeaderError.blockError("reserved BTYPE")) {
       _ = try Sit.blockBegin(value: 7)
     }
   }

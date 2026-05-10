@@ -142,22 +142,11 @@ public struct GitIgnoreMatcher: Sendable {
   }
 
   /// Escapes characters so `string` is safe to splice into a Swift `Regex` / ICU pattern as literal text.
-  /// (Same rules as `NSRegularExpression.escapedPattern(for:)` for path-relevant characters.)
+  /// Delegates to `NSRegularExpression.escapedPattern(for:)` which handles the full set of regex
+  /// metacharacters (`\^$.|?*+()[{`), then additionally escapes `/` for path safety.
   private static func regexEscapedLiteral(_ string: String) -> String {
-    var out = ""
-    out.reserveCapacity(string.utf8.count * 2)
-    for ch in string {
-      switch ch {
-      case "\\":
-        out += "\\\\"
-      case "^", "$", ".", "|", "?", "*", "+", "(", ")", "[", "{", "}", "/":
-        out.append("\\")
-        out.append(ch)
-      default:
-        out.append(ch)
-      }
-    }
-    return out
+    let escaped = NSRegularExpression.escapedPattern(for: string)
+    return escaped.replacingOccurrences(of: "/", with: "\\/")
   }
 
   private static func patternToRegex(

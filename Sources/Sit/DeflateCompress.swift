@@ -55,6 +55,11 @@ public enum DeflateCompress: Sendable {
 
   /// DEFLATE stream using only **stored** blocks (BTYPE `00`). Valid for any
   /// payload size; chunking uses non-final blocks then one final block.
+  ///
+  /// > Note: This implementation produces stored (uncompressed) blocks only,
+  /// > which are always RFC 1951 compliant but may be 2–5× larger than a
+  /// > Huffman-coded deflate stream.  Git and zlib can read them without issue.
+  /// > A full Huffman-based compressor is future work.
   public static func compressStored(
     _ plain: [UInt8],
     maxPlainSize: Int = 64 << 20

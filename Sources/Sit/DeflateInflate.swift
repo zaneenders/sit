@@ -307,8 +307,8 @@ private enum FixedHuffmanTables {
   }()
 }
 
-enum DeflateInflate {
-  static func inflate(_ deflateBytes: [UInt8], maxOutputSize: Int = 64 << 20) throws
+package enum DeflateInflate {
+  package static func inflate(_ deflateBytes: [UInt8], maxOutputSize: Int = 64 << 20) throws
     -> ContiguousArray<UInt8>
   {
     var state = DeflateInputState(input: deflateBytes)
@@ -320,7 +320,7 @@ enum DeflateInflate {
   }
 
   /// Inflate a DEFLATE stream that may be followed by unrelated bytes.
-  static func inflateAllowTrailing(
+  package static func inflateAllowTrailing(
     _ deflateBytes: [UInt8],
     maxOutputSize: Int = 64 << 20
   ) throws -> (ContiguousArray<UInt8>, consumedDeflateBytes: Int) {

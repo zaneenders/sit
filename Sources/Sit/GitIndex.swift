@@ -2,19 +2,47 @@ public import Foundation
 
 /// Git index (`.git/index`) version 2 read/write with regular-file entries only.
 public struct GitIndex: Sendable {
-  struct RawEntry: Equatable, Sendable {
-    var path: String
-    var ctimeSec: UInt32
-    var ctimeNSec: UInt32
-    var mtimeSec: UInt32
-    var mtimeNSec: UInt32
-    var dev: UInt32
-    var ino: UInt32
-    var mode: UInt32
-    var uid: UInt32
-    var gid: UInt32
-    var size: UInt32
-    var sha: [UInt8]
+  public struct RawEntry: Equatable, Sendable {
+    public var path: String
+    public var ctimeSec: UInt32
+    public var ctimeNSec: UInt32
+    public var mtimeSec: UInt32
+    public var mtimeNSec: UInt32
+    public var dev: UInt32
+    public var ino: UInt32
+    public var mode: UInt32
+    public var uid: UInt32
+    public var gid: UInt32
+    public var size: UInt32
+    public var sha: [UInt8]
+
+    public init(
+      path: String,
+      ctimeSec: UInt32,
+      ctimeNSec: UInt32,
+      mtimeSec: UInt32,
+      mtimeNSec: UInt32,
+      dev: UInt32,
+      ino: UInt32,
+      mode: UInt32,
+      uid: UInt32,
+      gid: UInt32,
+      size: UInt32,
+      sha: [UInt8]
+    ) {
+      self.path = path
+      self.ctimeSec = ctimeSec
+      self.ctimeNSec = ctimeNSec
+      self.mtimeSec = mtimeSec
+      self.mtimeNSec = mtimeNSec
+      self.dev = dev
+      self.ino = ino
+      self.mode = mode
+      self.uid = uid
+      self.gid = gid
+      self.size = size
+      self.sha = sha
+    }
   }
 
   private var entries: [RawEntry]
@@ -45,8 +73,31 @@ public struct GitIndex: Sendable {
     Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0.sha) })
   }
 
+  /// Lightweight stat metadata stored in the index for a tracked path (used to
+  /// detect modifications without re-hashing the file on disk).
+  public struct IndexStat: Equatable, Sendable {
+    public let mtimeSec: UInt32
+    public let mtimeNSec: UInt32
+    public let size: UInt32
+    public let sha: [UInt8]
+  }
+
+  /// Returns the cached `(mtime, size, sha)` for `path` if the path is tracked,
+  /// or `nil` otherwise.
+  public func indexStat(for path: String) -> IndexStat? {
+    guard let e = entries.first(where: { $0.path == path }) else { return nil }
+    return IndexStat(mtimeSec: e.mtimeSec, mtimeNSec: e.mtimeNSec, size: e.size, sha: e.sha)
+  }
+
   public mutating func removeEntry(path: String) {
     entries.removeAll { $0.path == path }
+  }
+
+  /// Directly insert an entry bypassing file I/O (for testing and benchmarks).
+  public mutating func insertEntry(_ entry: RawEntry) {
+    entries.removeAll { $0.path == entry.path }
+    entries.append(entry)
+    entries.sort { $0.path < $1.path }
   }
 
   /// Stage regular files (not directories). Paths must sit under `workTree`.
@@ -148,6 +199,10 @@ public struct GitIndex: Sendable {
   private static func metadataForIndex(path: String, size: UInt32) throws -> Meta {
     let attrs = try FileManager.default.attributesOfItem(atPath: path)
     let mtime = (attrs[.modificationDate] as? Date) ?? Date()
+    /// NOTE: Foundation's `.creationDate` maps to `st_birthtime` on Darwin / `st_btime` on some
+    /// Linux filesystems.  Real Git uses `st_ctime` (inode change time), which Foundation does
+    /// not expose.  The fallback to `mtime` is a best-effort approximation; index entries
+    /// written by `sit` will have an approximate ctime that may differ from `git` on Unix.
     let ctime = (attrs[.creationDate] as? Date) ?? mtime
     let posix = UInt32(truncatingIfNeeded: (attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0o644)
     let perm = posix & 0o777
