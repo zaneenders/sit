@@ -256,4 +256,19 @@ struct SitTests: ~Copyable {
       return nil
     }
   }
+
+  // Quick size sanity check: Huffman beats stored significantly for repetitive data
+  @Test func huffmanCompressesBetterThanStored() throws {
+    let repetitive = [UInt8](repeating: UInt8(ascii: "A"), count: 400)
+    let stored = try DeflateCompress.compressStored(repetitive)
+    let fixed = try DeflateCompress.compressFixed(repetitive)
+    let chosen = try DeflateCompress.compress(repetitive)
+    // Fixed Huffman with LZ77 should be drastically smaller than stored
+    #expect(fixed.count < stored.count / 5)
+    // The chosen compression should be at least as good as fixed
+    #expect(chosen.count <= fixed.count)
+    // Should decompress correctly
+    let roundtrip = try DeflateInflate.inflate(chosen)
+    #expect(Array(roundtrip) == repetitive)
+  }
 }
