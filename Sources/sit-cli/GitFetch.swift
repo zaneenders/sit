@@ -312,6 +312,10 @@ enum GitFetch {
         capabilities: advert.capabilities)
     }
 
+    // DEBUG: trace fetch response
+    let msg = "[sit] fetch: want=\(wantHashes.count) have=\(haveHashes.count) pack=\(packData.count) bytes\n"
+    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
+
     // 5. Import pack objects (skip if server sent no pack)
     let result: GitPackImporter.ImportResult
     if packData.isEmpty {
@@ -323,6 +327,9 @@ enum GitFetch {
         packs: packs)
     }
 
+    let msg2 = "[sit] import: \(result.importedSHAs.count) objects, \(result.unresolvedDeltas) unresolved\n"
+    try? FileHandle.standardError.write(contentsOf: Data(msg2.utf8))
+
     if result.unresolvedDeltas > 0 {
       // This shouldn't happen in normal usage but we log a warning
       let msg = "warning: \(result.unresolvedDeltas) delta objects could not be resolved\n"
@@ -333,7 +340,8 @@ enum GitFetch {
     var fetchedRefs: [String: String] = [:]
     for (refName, sha20) in fetchRefs {
       let shaHex = GitHex.encodeLower(sha20)
-      if result.importedSHAs.contains(shaHex) || haveHashes.contains(shaHex) {
+      let willUpdate = result.importedSHAs.contains(shaHex) || haveHashes.contains(shaHex)
+      if willUpdate {
         // Only update tracking ref if we have the object
         let trackingRef = remoteTrackingRef(remoteName: remote.name, remoteRef: refName)
         if let trackingRef = trackingRef {
@@ -341,6 +349,8 @@ enum GitFetch {
         }
         fetchedRefs[refName] = shaHex
       }
+      let msg3 = "[sit] tracking: \(refName) sha=\(String(shaHex.prefix(8))) update=\(willUpdate) inImport=\(result.importedSHAs.contains(shaHex)) inHave=\(haveHashes.contains(shaHex))\n"
+      try? FileHandle.standardError.write(contentsOf: Data(msg3.utf8))
     }
 
     return fetchedRefs
