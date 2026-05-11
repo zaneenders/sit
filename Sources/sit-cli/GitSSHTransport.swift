@@ -52,6 +52,64 @@ enum GitSSHTransport {
     return GitSmartHTTP.parseRefAdvertisement(data)
   }
 
+  /// Get the fetch ref advertisement by running
+  /// `ssh <user>@<host> "git-upload-pack '<path>'"`.
+  static func advertiseFetchRefs(ssh: SSHURL) async throws -> GitSmartHTTP.RefAdvertisement {
+    let command = "git-upload-pack '\(ssh.path)'"
+    let data = try await sshInvoke(host: ssh.host, user: ssh.user, command: command)
+    return GitSmartHTTP.parseRefAdvertisement(data)
+  }
+
+  // MARK: - Fetch
+
+  /// Negotiate and fetch a packfile from the remote over SSH.
+  ///
+  /// Protocol (git-upload-pack over SSH):
+  /// 1. Server sends ref advertisement → we already parsed it
+  /// 2. We reconnect and send want/have pkt-lines + done + flush
+  /// 3. Server sends ACK/NAK + packfile
+  static func fetch(
+    ssh: SSHURL,
+    wantHashes: [String],
+    haveHashes: [String] = [],
+    capabilities: Set<String> = []
+  ) async throws -> [UInt8] {
+    let command = "git-upload-pack '\(ssh.path)'"
+
+    let supportedCaps = capabilities.filter { cap in
+      ["multi_ack", "multi_ack_detailed", "thin-pack", "side-band-64k", "ofs-delta"].contains(cap)
+    }
+
+    var requestBody: [UInt8] = []
+
+    var firstWant = true
+    for sha in wantHashes {
+      let line: String
+      if firstWant && !supportedCaps.isEmpty {
+        line = "want \(sha) \(supportedCaps.joined(separator: " "))\n"
+        firstWant = false
+      } else {
+        line = "want \(sha)\n"
+      }
+      requestBody.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+    }
+
+    for sha in haveHashes {
+      requestBody.append(contentsOf: GitPktLine.encode(Array("have \(sha)\n".utf8)))
+    }
+
+    requestBody.append(contentsOf: GitPktLine.encode("done\n"))
+    requestBody.append(contentsOf: GitPktLine.flush)
+
+    let responseBytes = try await sshInvokeWithInput(
+      host: ssh.host,
+      user: ssh.user,
+      command: command,
+      input: requestBody)
+
+    return GitSmartHTTP.parseFetchResponse(responseBytes)
+  }
+
   // MARK: - Push
 
   /// Push ref updates and a packfile to the remote over SSH.

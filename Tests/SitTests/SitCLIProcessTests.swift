@@ -97,11 +97,7 @@ struct SitCLIProcessTests: ~Copyable {
     }
   }
 
-  @Test func sitPullStillPassthroughToGit() async throws {
-    guard let gitPath = Self.gitPath() else {
-      Issue.record("skip: git not found on PATH")
-      return
-    }
+  @Test func sitPullFailsWithoutUpstream() async throws {
     guard let sitURL = Self.sitExecutableURL() else {
       Issue.record("skip: could not find built `sit`")
       return
@@ -113,12 +109,10 @@ struct SitCLIProcessTests: ~Copyable {
         executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
       #expect(initCode == 0, "sit init: \(errInit)")
 
-      // Pull is still a passthrough to git
+      // Native pull should fail (non-zero) when no upstream remote is configured
       let codeSitPull = try await Self.runSitQuiet(
         executable: sitURL.path, workingDirectory: work, arguments: ["pull"])
-      let codeGitPull = try await Self.runQuiet(
-        executable: gitPath, arguments: ["-C", work.path, "pull"])
-      #expect(codeSitPull == codeGitPull)
+      #expect(codeSitPull != 0, "sit pull without remote should fail")
     }
   }
 
@@ -195,7 +189,7 @@ struct SitCLIProcessTests: ~Copyable {
     let record = try await Subprocess.run(
       .name(executable),
       arguments: Arguments(arguments),
-      workingDirectory: FilePath(platformString: workingDirectory.path),
+      workingDirectory: FilePath(workingDirectory.path),
       output: .discarded,
       error: .discarded
     )
@@ -209,7 +203,7 @@ struct SitCLIProcessTests: ~Copyable {
     let record = try await Subprocess.run(
       .name(executable),
       arguments: Arguments(arguments),
-      workingDirectory: FilePath(platformString: workingDirectory.path),
+      workingDirectory: FilePath(workingDirectory.path),
       output: .string(limit: Int.max),
       error: .string(limit: Int.max)
     )

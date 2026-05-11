@@ -76,7 +76,7 @@ public enum GitLooseObjectWriter {
     ["100644", "100755", "120000", "040000"].contains(m)
   }
 
-  private static func writeObject(gitDir: URL, type: String, body: [UInt8]) throws -> [UInt8] {
+  public static func writeObject(gitDir: URL, type: String, body: [UInt8]) throws -> [UInt8] {
     var header: [UInt8] = []
     header.append(contentsOf: type.utf8)
     header.append(UInt8(ascii: " "))

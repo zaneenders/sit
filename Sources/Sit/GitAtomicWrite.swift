@@ -4,6 +4,8 @@ import SystemPackage
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif canImport(Musl)
+import Musl
 #endif
 
 /// Write `content` to `target` atomically using Git's lockfile pattern:

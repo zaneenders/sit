@@ -225,35 +225,6 @@ struct SitStatus: ParsableCommand {
   }
 }
 
-/// Run `git <subcommand>` with extra args; inherits stdin/stdout/stderr like running git directly.
-private enum SitGitPassthrough {
-  /// Maximum time (seconds) to wait for a `git` subprocess before killing it.
-  private static let timeoutSeconds: Int = 300
-
-  static func run(subcommand: String, gitArguments: [String]) throws {
-    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-    _ = try GitRepository.discover(from: cwd)
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    p.arguments = ["git", subcommand] + gitArguments
-    p.currentDirectoryURL = cwd
-    try p.run()
-
-    let timer = DispatchSource.makeTimerSource()
-    timer.schedule(deadline: .now() + .seconds(timeoutSeconds))
-    timer.setEventHandler {
-      p.terminate()
-    }
-    timer.resume()
-
-    p.waitUntilExit()
-    timer.cancel()
-
-    let status = p.terminationStatus
-    guard status == 0 else { throw ExitCode(status) }
-  }
-}
-
 struct SitPush: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "push",
@@ -277,16 +248,21 @@ struct SitPush: AsyncParsableCommand {
   }
 }
 
-struct SitPull: ParsableCommand {
+struct SitPull: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "pull",
-    abstract: "Fetch from and integrate with another repository (passthrough to git; native fetch not yet implemented)."
+    abstract: "Fetch from and integrate with the upstream remote (native implementation)."
   )
 
-  @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git pull.")
-  var gitArguments: [String] = []
+  @Argument(help: "Remote name (default: upstream remote for the current branch).")
+  var remote: String?
 
-  mutating func run() throws {
-    try SitGitPassthrough.run(subcommand: "pull", gitArguments: gitArguments)
+  mutating func run() async throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
+    try await GitPull.pull(
+      gitDir: gitDir,
+      workTree: workTree,
+      remoteName: remote)
   }
 }

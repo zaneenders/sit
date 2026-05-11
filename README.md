@@ -19,24 +19,23 @@ swift test
 
 ### Code coverage
 
-macos
+**macOS**
 ```bash
 swift test --enable-code-coverage
 PROFDATA=$(find .build -name '*.profdata' -print -quit)
 BIN=$(find .build -name 'sitPackageTests' -type f -not -path '*.dSYM*' -print -quit)
 xcrun llvm-cov report "$BIN" \
   --instr-profile="$PROFDATA" \
-  --ignore-filename-regex='\.build/'
+  --ignore-filename-regex='(\.build/|Tests/)'
 ```
 
 **Linux**
-
 ```bash
 swift test --enable-code-coverage
 PROFDATA=$(find .build -name '*.profdata' -print -quit)
 BIN=$(find .build -name 'sitPackageTests.xctest' -type f -print -quit)
 llvm-cov report "$BIN" \
   --instr-profile="$PROFDATA" \
-  --ignore-filename-regex='\.build/'
+  --ignore-filename-regex='(\.build/|Tests/)'
 ```
 

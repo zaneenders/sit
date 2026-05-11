@@ -11,7 +11,7 @@ import Sit
 /// framing, reference advertisement parsing, and the push request flow.
 enum GitSmartHTTP {
 
-  // MARK: - Reference advertisement (phase 1 of push)
+  // MARK: - Reference advertisement (phase 1 of push / fetch)
 
   /// A single ref advertised by the remote.
   struct AdvertisedRef: Equatable {
@@ -21,7 +21,7 @@ enum GitSmartHTTP {
     let capabilities: [String]
   }
 
-  /// Result of reference discovery (`/info/refs?service=git-receive-pack`).
+  /// Result of reference discovery.
   struct RefAdvertisement {
     let refs: [AdvertisedRef]
     /// Capabilities found across all lines (typically on the first ref,
@@ -38,6 +38,30 @@ enum GitSmartHTTP {
     var request = HTTPClientRequest(url: "\(refsURL)?service=git-receive-pack")
     request.method = .GET
     request.headers.add(name: "Accept", value: "application/x-git-receive-pack-advertisement")
+    request.headers.add(name: "User-Agent", value: "sit/0.1")
+
+    let client = HTTPClient.shared
+    let response = try await client.execute(request, timeout: .seconds(30))
+    guard response.status == .ok else {
+      throw GitSmartHTTPError.badResponseStatus(response.status.code)
+    }
+
+    let body = try await response.body.collect(upTo: 1 << 20)  // 1 MB max
+    let bytes = body.readableBytesView
+    let data = Array(bytes)
+
+    return parseRefAdvertisement(data)
+  }
+
+  /// Fetch the reference advertisement from `url/info/refs?service=git-upload-pack`.
+  ///
+  /// - Parameter url: The remote repository URL (e.g. `https://github.com/user/repo.git`)
+  /// - Returns: Parsed ref advertisement
+  static func advertiseFetchRefs(url: String) async throws -> RefAdvertisement {
+    let refsURL = url.hasSuffix("/") ? "\(url)info/refs" : "\(url)/info/refs"
+    var request = HTTPClientRequest(url: "\(refsURL)?service=git-upload-pack")
+    request.method = .GET
+    request.headers.add(name: "Accept", value: "application/x-git-upload-pack-advertisement")
     request.headers.add(name: "User-Agent", value: "sit/0.1")
 
     let client = HTTPClient.shared
@@ -99,6 +123,105 @@ enum GitSmartHTTP {
     }
 
     return RefAdvertisement(refs: refs, capabilities: allCapabilities)
+  }
+
+  // MARK: - Fetch (phase 2: upload-pack)
+
+  /// Negotiate and fetch a packfile from `url/git-upload-pack`.
+  ///
+  /// - Parameter url: The remote repository URL
+  /// - Parameter wantHashes: 40-hex SHAs of objects we want
+  /// - Parameter haveHashes: 40-hex SHAs of objects we already have (for common-commit negotiation)
+  /// - Parameter capabilities: Capabilities advertised by the server
+  /// - Returns: The packfile bytes (including "PACK" header and SHA-1 trailer)
+  static func fetch(
+    url: String,
+    wantHashes: [String],
+    haveHashes: [String] = [],
+    capabilities: Set<String> = []
+  ) async throws -> [UInt8] {
+    let fetchURL = url.hasSuffix("/") ? "\(url)git-upload-pack" : "\(url)/git-upload-pack"
+
+    // Filter capabilities to what we support
+    let supportedCaps = capabilities.filter { cap in
+      ["multi_ack", "multi_ack_detailed", "thin-pack", "side-band-64k", "ofs-delta"].contains(cap)
+    }
+
+    // Build the pkt-line request body
+    var body: [UInt8] = []
+
+    // First want line carries capabilities
+    var firstWant = true
+    for sha in wantHashes {
+      let line: String
+      if firstWant && !supportedCaps.isEmpty {
+        line = "want \(sha) \(supportedCaps.joined(separator: " "))\n"
+        firstWant = false
+      } else {
+        line = "want \(sha)\n"
+      }
+      body.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+    }
+
+    // Have lines
+    for sha in haveHashes {
+      let line = "have \(sha)\n"
+      body.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+    }
+
+    // Done + flush
+    body.append(contentsOf: GitPktLine.encode("done\n"))
+    body.append(contentsOf: GitPktLine.flush)
+
+    // Send the request
+    var request = HTTPClientRequest(url: fetchURL)
+    request.method = .POST
+    request.headers.add(name: "Content-Type", value: "application/x-git-upload-pack-request")
+    request.headers.add(name: "User-Agent", value: "sit/0.1")
+    request.body = .bytes(ByteBuffer(bytes: body))
+
+    let client = HTTPClient.shared
+    let response = try await client.execute(request, timeout: .seconds(300))
+    guard response.status == .ok else {
+      let errorBody = try? await response.body.collect(upTo: 4096)
+      let errorMsg = errorBody.flatMap { String(decoding: $0.readableBytesView, as: UTF8.self) }
+        ?? ""
+      throw GitSmartHTTPError.badResponseStatusWithBody(response.status.code, errorMsg)
+    }
+
+    let responseBody = try await response.body.collect(upTo: 100 << 20)  // 100 MB max
+    let responseBytes = Array(responseBody.readableBytesView)
+
+    return parseFetchResponse(responseBytes)
+  }
+
+  /// Parse the fetch response: skip pkt-line ACK/NAK lines, extract the packfile.
+  ///
+  /// The server sends pkt-line ACK/NAK lines, then the packfile follows directly
+  /// (not pkt-line framed). The packfile starts with "PACK" (0x50 0x41 0x43 0x4b).
+  static func parseFetchResponse(_ data: [UInt8]) -> [UInt8] {
+    var pos = 0
+
+    // Read pkt-line packets until we can't parse a valid packet
+    while pos < data.count {
+      guard let (_, consumed) = GitPktLine.decodeOne(from: data, at: pos) else {
+        // Not a valid pkt-line — the rest is the packfile
+        break
+      }
+      pos += consumed
+    }
+
+    // Scan for "PACK" magic to find the start of the packfile
+    while pos + 4 <= data.count {
+      if data[pos] == 0x50, data[pos+1] == 0x41,
+         data[pos+2] == 0x43, data[pos+3] == 0x4b {
+        return Array(data[pos...])
+      }
+      pos += 1
+    }
+
+    // No packfile found — return whatever remains (may be empty)
+    return Array(data[pos...])
   }
 
   // MARK: - Push (phase 2)
