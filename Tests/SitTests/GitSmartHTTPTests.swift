@@ -91,4 +91,75 @@ struct GitSmartHTTPTests: ~Copyable {
     #expect(lines.count == 3)
     #expect(lines[2] == "ng refs/heads/other non-fast-forward")
   }
+
+  // MARK: - Fetch response parsing
+
+  /// "PACK" is 0x50 0x41 0x43 0x4b = hex "50AC" = decimal 20652.
+  /// This used to be misinterpreted as a pkt-line length prefix.
+  private static let packMagic: [UInt8] = [0x50, 0x41, 0x43, 0x4b]
+
+  @Test func parseFetchResponse_directPackNoPktLines() {
+    // Server sends packfile without any ACK/NAK preamble
+    let packBytes = Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0] // header, obj count 0
+    let result = GitSmartHTTP.parseFetchResponse(packBytes)
+    #expect(result == packBytes)
+  }
+
+  @Test func parseFetchResponse_NAKThenPack() {
+    // Server sends NAK then packfile
+    var body: [UInt8] = []
+    body.append(contentsOf: GitPktLine.encode("NAK\n"))
+    body.append(contentsOf: Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0])
+    let result = GitSmartHTTP.parseFetchResponse(body)
+    #expect(result.starts(with: Self.packMagic))
+    #expect(result.count == Self.packMagic.count + 8)
+  }
+
+  @Test func parseFetchResponse_ACKThenPack() {
+    // Server sends ACK then packfile
+    var body: [UInt8] = []
+    body.append(contentsOf: GitPktLine.encode("ACK 3b18e512dba79e4c8300dd08aeb37f8e728b8dad common\n"))
+    body.append(contentsOf: Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0])
+    let result = GitSmartHTTP.parseFetchResponse(body)
+    #expect(result.starts(with: Self.packMagic))
+  }
+
+  @Test func parseFetchResponse_MultipleACKPlusNAKThenPack() {
+    // Multiple ACK lines, then NAK, then pack
+    var body: [UInt8] = []
+    body.append(contentsOf: GitPktLine.encode("ACK 3b18e512dba79e4c8300dd08aeb37f8e728b8dad common\n"))
+    body.append(contentsOf: GitPktLine.encode("ACK dd7e1c6f0fefe118f0b63d9f10908c460aa317a6 common\n"))
+    body.append(contentsOf: GitPktLine.encode("NAK\n"))
+    body.append(contentsOf: Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0])
+    let result = GitSmartHTTP.parseFetchResponse(body)
+    #expect(result.starts(with: Self.packMagic))
+  }
+
+  @Test func parseFetchResponse_FlushThenPack() {
+    // Flush (0000) then packfile
+    var body: [UInt8] = []
+    body.append(contentsOf: GitPktLine.flush)
+    body.append(contentsOf: Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0])
+    let result = GitSmartHTTP.parseFetchResponse(body)
+    #expect(result.starts(with: Self.packMagic))
+  }
+
+  @Test func parseFetchResponse_NoPackfile() {
+    // Server sends only NAK, no packfile
+    var body: [UInt8] = []
+    body.append(contentsOf: GitPktLine.encode("NAK\n"))
+    let result = GitSmartHTTP.parseFetchResponse(body)
+    #expect(result.isEmpty)
+  }
+
+  @Test func parseFetchResponse_EmptyResponse() {
+    let result = GitSmartHTTP.parseFetchResponse([])
+    #expect(result.isEmpty)
+  }
+
+  @Test func parseFetchResponse_PackOnlyNoHeaderBytes() {
+    // "PACK" followed by nothing else — ensures the "PACK as valid hex" bug is fixed
+    let result = GitSmartHTTP.parseFetchResponse(Self.packMagic)
+    #expect(result == Self.packMagic)
+  }
 }

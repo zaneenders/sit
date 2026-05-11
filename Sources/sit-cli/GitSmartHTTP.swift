@@ -199,29 +199,36 @@ enum GitSmartHTTP {
   ///
   /// The server sends pkt-line ACK/NAK lines, then the packfile follows directly
   /// (not pkt-line framed). The packfile starts with "PACK" (0x50 0x41 0x43 0x4b).
+  /// Critically, we must check for "PACK" *before* trying pkt-line decode, because
+  /// the bytes "PACK" are valid hex (0x50AC) and would be misinterpreted as a
+  /// pkt-line length prefix.
   static func parseFetchResponse(_ data: [UInt8]) -> [UInt8] {
     var pos = 0
 
-    // Read pkt-line packets until we can't parse a valid packet
+    // Read pkt-line packets
     while pos < data.count {
+      // Check for "PACK" magic before attempting pkt-line decode
+      if pos + 4 <= data.count,
+         data[pos] == 0x50, data[pos+1] == 0x41,
+         data[pos+2] == 0x43, data[pos+3] == 0x4b {
+        return Array(data[pos...])
+      }
+
       guard let (_, consumed) = GitPktLine.decodeOne(from: data, at: pos) else {
-        // Not a valid pkt-line — the rest is the packfile
-        break
+        // Can't parse pkt-line — scan forward for PACK
+        while pos + 4 <= data.count {
+          if data[pos] == 0x50, data[pos+1] == 0x41,
+             data[pos+2] == 0x43, data[pos+3] == 0x4b {
+            return Array(data[pos...])
+          }
+          pos += 1
+        }
+        return []
       }
       pos += consumed
     }
 
-    // Scan for "PACK" magic to find the start of the packfile
-    while pos + 4 <= data.count {
-      if data[pos] == 0x50, data[pos+1] == 0x41,
-         data[pos+2] == 0x43, data[pos+3] == 0x4b {
-        return Array(data[pos...])
-      }
-      pos += 1
-    }
-
-    // No packfile found — return whatever remains (may be empty)
-    return Array(data[pos...])
+    return []
   }
 
   // MARK: - Push (phase 2)
