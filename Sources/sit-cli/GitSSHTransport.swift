@@ -77,7 +77,7 @@ enum GitSSHTransport {
     let command = "git-upload-pack '\(ssh.path)'"
 
     let supportedCaps = capabilities.filter { cap in
-      ["multi_ack", "multi_ack_detailed", "thin-pack", "side-band-64k", "ofs-delta"].contains(cap)
+      ["multi_ack", "multi_ack_detailed", "thin-pack", "ofs-delta"].contains(cap)
     }
 
     var requestBody: [UInt8] = []

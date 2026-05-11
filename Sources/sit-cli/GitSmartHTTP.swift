@@ -144,7 +144,7 @@ enum GitSmartHTTP {
 
     // Filter capabilities to what we support
     let supportedCaps = capabilities.filter { cap in
-      ["multi_ack", "multi_ack_detailed", "thin-pack", "side-band-64k", "ofs-delta"].contains(cap)
+      ["multi_ack", "multi_ack_detailed", "thin-pack", "ofs-delta"].contains(cap)
     }
 
     // Build the pkt-line request body
