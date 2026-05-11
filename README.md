@@ -6,13 +6,7 @@ Swift library and small CLI for working with on-disk Git repositories: loose obj
 
 Requires **Swift 6.3** or newer.
 
-## Tests
-
-```bash
-swift test
-```
-
-### Code coverage
+## Code coverage
 
 **macOS**
 ```bash
