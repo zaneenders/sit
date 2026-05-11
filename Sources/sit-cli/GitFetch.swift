@@ -10,7 +10,7 @@ enum GitPackImporter {
 
   /// Errors that can occur during pack import.
   enum Error: Swift.Error, Equatable {
-    case truncatedPack
+    case truncatedPack(Int)
     case badPackSignature
     case unknownPackVersion(UInt32)
     case unknownObjectType(Int)
@@ -26,6 +26,11 @@ enum GitPackImporter {
     let importedSHAs: Set<String>
     /// Number of object references that could not be resolved (REF_DELTA with missing base).
     let unresolvedDeltas: Int
+
+    init(importedSHAs: Set<String>, unresolvedDeltas: Int) {
+      self.importedSHAs = importedSHAs
+      self.unresolvedDeltas = unresolvedDeltas
+    }
   }
 
   /// Process a raw pack and write all objects as loose objects.
@@ -39,7 +44,7 @@ enum GitPackImporter {
     packData: [UInt8],
     packs: [GitPack]
   ) throws -> ImportResult {
-    guard packData.count >= 12 else { throw Error.truncatedPack }
+    guard packData.count >= 12 else { throw Error.truncatedPack(packData.count) }
     guard packData[0] == 0x50, packData[1] == 0x41,
           packData[2] == 0x43, packData[3] == 0x4b else {
       throw Error.badPackSignature
@@ -51,7 +56,9 @@ enum GitPackImporter {
 
     // Verify trailing SHA-1
     let bodyEnd = packData.count - 20
-    guard bodyEnd >= 12 else { throw Error.truncatedPack }
+    guard bodyEnd >= 12 else {
+      throw Error.truncatedPack(packData.count)
+    }
     let storedSHA = Array(packData[bodyEnd...])
     let computedSHA = GitSHA1.digest(of: Array(packData[0..<bodyEnd]))
     guard storedSHA == computedSHA else { throw Error.packChecksumMismatch }
@@ -108,7 +115,7 @@ enum GitPackImporter {
 
       case 7:
         // REF_DELTA: read base SHA, decompress delta, look up base, apply
-        guard pos + 20 <= packData.count else { throw Error.truncatedPack }
+        guard pos + 20 <= packData.count else { throw Error.truncatedPack(packData.count) }
         let baseSHA = Array(packData[pos..<(pos + 20)])
         pos += 20
         let (deltaBody, zlibConsumed) = try ZlibLooseObject.decompressPrefix(in: packData, at: pos)
@@ -151,14 +158,14 @@ enum GitPackImporter {
     _ pack: [UInt8],
     pos: inout Int
   ) throws -> (type: Int, size: Int) {
-    guard pos < pack.count else { throw Error.truncatedPack }
+    guard pos < pack.count else { throw Error.truncatedPack(pack.count) }
     var c = pack[pos]
     pos += 1
     let type = (Int(c) >> 4) & 7
     var size = Int(c & 0x0f)
     var shift = 4
     while c & 0x80 != 0 {
-      guard pos < pack.count else { throw Error.truncatedPack }
+      guard pos < pack.count else { throw Error.truncatedPack(pack.count) }
       c = pack[pos]
       pos += 1
       size |= Int(c & 0x7f) << shift
@@ -168,13 +175,13 @@ enum GitPackImporter {
   }
 
   private static func readVariableWidthInt(_ pack: [UInt8], pos: inout Int) throws -> Int64 {
-    guard pos < pack.count else { throw Error.truncatedPack }
+    guard pos < pack.count else { throw Error.truncatedPack(pack.count) }
     var c = pack[pos]
     pos += 1
     var v = Int64(c & 127)
     while c & 128 != 0 {
       v += 1
-      guard pos < pack.count else { throw Error.truncatedPack }
+      guard pos < pack.count else { throw Error.truncatedPack(pack.count) }
       c = pack[pos]
       pos += 1
       v = (v << 7) + Int64(c & 127)
@@ -234,7 +241,7 @@ enum GitFetch {
     remote: GitRemote,
     refspecs: [String] = []
   ) async throws -> [String: String] {
-    let rawURL = remote.resolvedPushURL
+    let rawURL = remote.url
     guard !rawURL.isEmpty else { throw Error.noRemoteURL }
 
     let packs = try GitObjectDatabase.openAllPacks(gitDir: gitDir)
@@ -305,11 +312,16 @@ enum GitFetch {
         capabilities: advert.capabilities)
     }
 
-    // 5. Import pack objects
-    let result = try GitPackImporter.importPack(
-      gitDir: gitDir,
-      packData: packData,
-      packs: packs)
+    // 5. Import pack objects (skip if server sent no pack)
+    let result: GitPackImporter.ImportResult
+    if packData.isEmpty {
+      result = GitPackImporter.ImportResult(importedSHAs: [], unresolvedDeltas: 0)
+    } else {
+      result = try GitPackImporter.importPack(
+        gitDir: gitDir,
+        packData: packData,
+        packs: packs)
+    }
 
     if result.unresolvedDeltas > 0 {
       // This shouldn't happen in normal usage but we log a warning
