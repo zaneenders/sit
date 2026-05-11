@@ -10,7 +10,6 @@ Requires **Swift 6.3** or newer.
 
 Read pack index v2, pack objects (including deltas), zlib loose objects, DEFLATE inflate, binary deltas, loose blobs. Writes: `git init`-style layout, zlib loose blobs/trees/commits, ref updates, index staging, commits from the index. Ignore rules support `.git/info/exclude` and `.gitignore` files. SHA-1 object ids via [swift-crypto](https://github.com/apple/swift-crypto).
 
-
 ## Tests
 
 ```bash
