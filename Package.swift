@@ -34,7 +34,6 @@ let package = Package(
         .target(name: "Sit"),
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
         .product(name: "AsyncHTTPClient", package: "async-http-client"),
-        .product(name: "Subprocess", package: "swift-subprocess"),
         .product(name: "NIOSSH", package: "swift-nio-ssh"),
         .product(name: "NIOCore", package: "swift-nio"),
         .product(name: "NIOPosix", package: "swift-nio"),
