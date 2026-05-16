@@ -94,6 +94,10 @@ enum GitPush {
     if let ssh = detectSSH(rawURL) {
       displayURL = "git@\(ssh.host):\(ssh.path)"
       advert = try await GitSSHTransport.advertiseRefs(ssh: ssh)
+    } else if GitLocalTransport.isLocalURL(rawURL) {
+      displayURL = rawURL
+      advert = try await GitLocalTransport.advertiseRefs(
+        path: GitLocalTransport.localPath(from: rawURL))
     } else {
       displayURL = convertToHTTPURL(rawURL)
       advert = try await GitSmartHTTP.advertiseRefs(url: displayURL)
@@ -134,6 +138,12 @@ enum GitPush {
     if let ssh = detectSSH(rawURL) {
       results = try await GitSSHTransport.push(
         ssh: ssh,
+        refUpdates: refUpdates,
+        packData: packResult.packData,
+        capabilities: advert.capabilities)
+    } else if GitLocalTransport.isLocalURL(rawURL) {
+      results = try await GitLocalTransport.push(
+        path: GitLocalTransport.localPath(from: rawURL),
         refUpdates: refUpdates,
         packData: packResult.packData,
         capabilities: advert.capabilities)

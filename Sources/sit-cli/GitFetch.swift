@@ -255,6 +255,10 @@ enum GitFetch {
     if let ssh = GitSSHTransport.parseSSHURL(rawURL) {
       displayURL = "git@\(ssh.host):\(ssh.path)"
       advert = try await GitSSHTransport.advertiseFetchRefs(ssh: ssh)
+    } else if GitLocalTransport.isLocalURL(rawURL) {
+      displayURL = rawURL
+      advert = try await GitLocalTransport.advertiseFetchRefs(
+        path: GitLocalTransport.localPath(from: rawURL))
     } else {
       displayURL = convertToHTTPURL(rawURL)
       advert = try await GitSmartHTTP.advertiseFetchRefs(url: displayURL)
@@ -276,25 +280,19 @@ enum GitFetch {
 
     // 3. Collect want/have hashes
     let wantHashes = fetchRefs.map { GitHex.encodeLower($0.sha20) }
+    let haveHashes = Self.buildHaveHashes(gitDir: gitDir)
 
-    // Collect local refs as "have" for common-commit negotiation
-    var haveHashes = Set<String>()
-    // Add HEAD
-    if let headHex = try? GitHEAD.resolveCommitHex(gitDir: gitDir) {
-      haveHashes.insert(headHex)
-    }
-    // Add all local branches
-    let refsDir = gitDir.appendingPathComponent("refs/heads", isDirectory: true)
-    if FileManager.default.fileExists(atPath: refsDir.path) {
-      if let refs = try? collectRefs(in: refsDir, base: gitDir, prefix: "refs/heads/") {
-        haveHashes.formUnion(refs.values)
-      }
-    }
     // 4. Fetch pack from remote
     let packData: [UInt8]
     if let ssh = GitSSHTransport.parseSSHURL(rawURL) {
       packData = try await GitSSHTransport.fetch(
         ssh: ssh,
+        wantHashes: Array(wantHashes),
+        haveHashes: Array(haveHashes),
+        capabilities: advert.capabilities)
+    } else if GitLocalTransport.isLocalURL(rawURL) {
+      packData = try await GitLocalTransport.fetch(
+        path: GitLocalTransport.localPath(from: rawURL),
         wantHashes: Array(wantHashes),
         haveHashes: Array(haveHashes),
         capabilities: advert.capabilities)
@@ -340,6 +338,25 @@ enum GitFetch {
     }
 
     return fetchedRefs
+  }
+
+  /// Build the set of commit SHAs we can claim to already have.
+  ///
+  /// Only includes commits from local branches and HEAD — never tracking refs
+  /// (refs/remotes/*), because a tracking ref is just a cached pointer and does
+  /// not guarantee the object is present in the local object store.
+  static func buildHaveHashes(gitDir: URL) -> Set<String> {
+    var haveHashes = Set<String>()
+    if let headHex = try? GitHEAD.resolveCommitHex(gitDir: gitDir) {
+      haveHashes.insert(headHex)
+    }
+    let refsDir = gitDir.appendingPathComponent("refs/heads", isDirectory: true)
+    if FileManager.default.fileExists(atPath: refsDir.path) {
+      if let refs = try? collectRefs(in: refsDir, base: gitDir, prefix: "refs/heads/") {
+        haveHashes.formUnion(refs.values)
+      }
+    }
+    return haveHashes
   }
 
   /// Resolve fetch refspecs against the advertisement.
