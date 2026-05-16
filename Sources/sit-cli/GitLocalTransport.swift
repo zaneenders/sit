@@ -170,51 +170,25 @@ enum GitLocalTransport {
   }
 
   private static func commitChildren(_ payload: [UInt8]) -> [[UInt8]] {
-    guard let text = String(bytes: payload, encoding: .utf8) else { return [] }
+    let (treeHex, parents) = GitObjectParser.parseCommit(payload)
     var result: [[UInt8]] = []
-    for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
-      let line = String(raw)
-      if line.isEmpty { break }  // blank line ends commit headers
-      guard line.hasPrefix("tree ") || line.hasPrefix("parent ") else { continue }
-      let parts = line.split(separator: " ", maxSplits: 1)
-      guard parts.count == 2 else { continue }
-      if let sha20 = try? GitHex.decode20(String(parts[1])) { result.append(sha20) }
+    if let sha20 = try? GitHex.decode20(treeHex) { result.append(sha20) }
+    for hex in parents {
+      if let sha20 = try? GitHex.decode20(hex) { result.append(sha20) }
     }
     return result
   }
 
   private static func treeChildren(_ payload: [UInt8]) -> [[UInt8]] {
-    var result: [[UInt8]] = []
-    var i = 0
-    while i < payload.count {
-      while i < payload.count, payload[i] != UInt8(ascii: " ") { i += 1 }  // skip mode
-      i += 1
-      while i < payload.count, payload[i] != 0 { i += 1 }  // skip name
-      i += 1
-      guard i + 20 <= payload.count else { break }
-      result.append(Array(payload[i..<(i + 20)]))
-      i += 20
-    }
-    return result
+    GitObjectParser.parseTree(payload).map(\.sha20)
   }
 
   private static func tagChildren(_ payload: [UInt8]) -> [[UInt8]] {
-    guard let text = String(bytes: payload, encoding: .utf8) else { return [] }
-    for raw in text.split(separator: "\n") {
-      let line = String(raw)
-      guard line.hasPrefix("object ") else { continue }
-      if let sha20 = try? GitHex.decode20(String(line.dropFirst(7).prefix(40))) { return [sha20] }
-    }
+    if let sha20 = GitObjectParser.tagObjectSHA(payload) { return [sha20] }
     return []
   }
 
   private static func typeNumber(_ name: String) -> Int {
-    switch name {
-    case "commit": return 1
-    case "tree":   return 2
-    case "blob":   return 3
-    case "tag":    return 4
-    default:       return 3
-    }
+    GitObjectParser.typeInt(from: name)
   }
 }

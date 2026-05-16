@@ -34,23 +34,7 @@ enum GitSmartHTTP {
   /// - Parameter url: The remote repository URL (e.g. `https://github.com/user/repo.git`)
   /// - Returns: Parsed ref advertisement
   static func advertiseRefs(url: String) async throws -> RefAdvertisement {
-    let refsURL = url.hasSuffix("/") ? "\(url)info/refs" : "\(url)/info/refs"
-    var request = HTTPClientRequest(url: "\(refsURL)?service=git-receive-pack")
-    request.method = .GET
-    request.headers.add(name: "Accept", value: "application/x-git-receive-pack-advertisement")
-    request.headers.add(name: "User-Agent", value: "sit/0.1")
-
-    let client = HTTPClient.shared
-    let response = try await client.execute(request, timeout: .seconds(30))
-    guard response.status == .ok else {
-      throw GitSmartHTTPError.badResponseStatus(response.status.code)
-    }
-
-    let body = try await response.body.collect(upTo: 1 << 20)  // 1 MB max
-    let bytes = body.readableBytesView
-    let data = Array(bytes)
-
-    return parseRefAdvertisement(data)
+    try await fetchAdvertisement(url: url, service: "git-receive-pack")
   }
 
   /// Fetch the reference advertisement from `url/info/refs?service=git-upload-pack`.
@@ -58,10 +42,16 @@ enum GitSmartHTTP {
   /// - Parameter url: The remote repository URL (e.g. `https://github.com/user/repo.git`)
   /// - Returns: Parsed ref advertisement
   static func advertiseFetchRefs(url: String) async throws -> RefAdvertisement {
+    try await fetchAdvertisement(url: url, service: "git-upload-pack")
+  }
+
+  // MARK: - Private helpers
+
+  private static func fetchAdvertisement(url: String, service: String) async throws -> RefAdvertisement {
     let refsURL = url.hasSuffix("/") ? "\(url)info/refs" : "\(url)/info/refs"
-    var request = HTTPClientRequest(url: "\(refsURL)?service=git-upload-pack")
+    var request = HTTPClientRequest(url: "\(refsURL)?service=\(service)")
     request.method = .GET
-    request.headers.add(name: "Accept", value: "application/x-git-upload-pack-advertisement")
+    request.headers.add(name: "Accept", value: "application/x-\(service)-advertisement")
     request.headers.add(name: "User-Agent", value: "sit/0.1")
 
     let client = HTTPClient.shared

@@ -21,36 +21,6 @@ enum GitPush {
     GitSSHTransport.parseSSHURL(url)
   }
 
-  /// Convert SSH-style Git URLs to HTTPS so `async-http-client` can handle them.
-  /// - `git@github.com:user/repo.git` → `https://github.com/user/repo.git`
-  /// - `ssh://git@github.com/user/repo.git` → `https://github.com/user/repo.git`
-  /// - `https://…` / `http://…` → returned unchanged
-  private static func convertToHTTPURL(_ url: String) -> String {
-    // Already HTTP(S)
-    if url.hasPrefix("https://") || url.hasPrefix("http://") {
-      return url
-    }
-    // ssh://git@host/path → https://host/path
-    if url.hasPrefix("ssh://") {
-      let rest = String(url.dropFirst(6))
-      let noUser = rest.replacingOccurrences(of: "git@", with: "")
-      return "https://\(noUser)"
-    }
-    // git@host:path → https://host/path
-    if url.hasPrefix("git@") {
-      let rest = String(url.dropFirst(4))
-      let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-      if parts.count == 2 {
-        return "https://\(parts[0])/\(parts[1])"
-      }
-    }
-    // Fallback: assume it needs https://
-    if !url.contains("://") {
-      return "https://\(url)"
-    }
-    return url
-  }
-
   // MARK: - Public entry point
 
   /// Push the current branch to its configured upstream remote (or `remoteName`
@@ -91,7 +61,7 @@ enum GitPush {
     let advert: GitSmartHTTP.RefAdvertisement
     let displayURL: String
 
-    if let ssh = detectSSH(rawURL) {
+    if let ssh = GitURL.detectSSH(rawURL) {
       displayURL = "git@\(ssh.host):\(ssh.path)"
       advert = try await GitSSHTransport.advertiseRefs(ssh: ssh)
     } else if GitLocalTransport.isLocalURL(rawURL) {
@@ -99,7 +69,7 @@ enum GitPush {
       advert = try await GitLocalTransport.advertiseRefs(
         path: GitLocalTransport.localPath(from: rawURL))
     } else {
-      displayURL = convertToHTTPURL(rawURL)
+      displayURL = GitURL.convertToHTTPURL(rawURL)
       advert = try await GitSmartHTTP.advertiseRefs(url: displayURL)
     }
 
@@ -135,7 +105,7 @@ enum GitPush {
 
     // 8. Send to remote (dispatch on transport)
     let results: [String]
-    if let ssh = detectSSH(rawURL) {
+    if let ssh = GitURL.detectSSH(rawURL) {
       results = try await GitSSHTransport.push(
         ssh: ssh,
         refUpdates: refUpdates,
@@ -149,7 +119,7 @@ enum GitPush {
         capabilities: advert.capabilities)
     } else {
       results = try await GitSmartHTTP.push(
-        url: convertToHTTPURL(rawURL),
+        url: GitURL.convertToHTTPURL(rawURL),
         refUpdates: refUpdates,
         packData: packResult.packData,
         capabilities: advert.capabilities)
@@ -227,18 +197,18 @@ enum GitPush {
       let (typeStr, payload) = try GitObjectDatabase.readObject(
         gitDir: gitDir, packs: packs, sha20: sha20)
 
-      let typeInt = typeStrToInt(typeStr)
+      let typeInt = GitObjectParser.typeInt(from: typeStr)
       objects.append(
         GitPackWriter.PackObject(sha20: sha20, type: typeInt, payload: payload))
 
       switch typeStr {
       case "commit":
-        let (treeHex, parents) = parseCommit(payload)
+        let (treeHex, parents) = GitObjectParser.parseCommit(payload)
         queue.append(treeHex)
         queue.append(contentsOf: parents)
       case "tree":
-        for entry in parseTree(payload) {
-          queue.append(entry.shaHex)
+        for entry in GitObjectParser.parseTree(payload) {
+          queue.append(GitHex.encodeLower(entry.sha20))
         }
       case "blob", "tag":
         break
@@ -248,70 +218,5 @@ enum GitPush {
     }
 
     return objects
-  }
-
-  private static func typeStrToInt(_ t: String) -> Int {
-    switch t {
-    case "commit": return 1
-    case "tree": return 2
-    case "blob": return 3
-    case "tag": return 4
-    default: return 1
-    }
-  }
-
-  // MARK: - Commit parsing
-
-  /// Extract tree and parent SHAs from a commit payload.
-  private static func parseCommit(_ payload: [UInt8]) -> (
-    treeHex: String, parentHexes: [String]
-  ) {
-    let str = String(decoding: payload, as: UTF8.self)
-    var treeHex = ""
-    var parents: [String] = []
-
-    for line in str.split(separator: "\n", omittingEmptySubsequences: false) {
-      if line.isEmpty { break }  // header/body separator
-      if line.hasPrefix("tree ") {
-        treeHex = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-      } else if line.hasPrefix("parent ") {
-        parents.append(
-          String(line.dropFirst(7)).trimmingCharacters(in: .whitespaces))
-      }
-    }
-
-    return (treeHex, parents)
-  }
-
-  // MARK: - Tree parsing
-
-  private struct TreeEntry {
-    let shaHex: String
-  }
-
-  /// Extract entry SHAs from a tree payload.
-  private static func parseTree(_ payload: [UInt8]) -> [TreeEntry] {
-    var entries: [TreeEntry] = []
-    var pos = 0
-
-    while pos < payload.count {
-      // Scan past "mode " — find the space
-      guard let spaceIdx = payload[pos...].firstIndex(of: UInt8(ascii: " "))
-      else { break }
-      pos = spaceIdx + 1
-
-      // Scan past "name\0" — find the null
-      guard let nullIdx = payload[pos...].firstIndex(of: 0) else { break }
-      pos = nullIdx + 1
-
-      // Read 20-byte SHA
-      guard pos + 20 <= payload.count else { break }
-      let sha20 = Array(payload[pos..<(pos + 20)])
-      pos += 20
-
-      entries.append(TreeEntry(shaHex: GitHex.encodeLower(sha20)))
-    }
-
-    return entries
   }
 }
