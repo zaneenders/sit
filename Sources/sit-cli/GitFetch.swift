@@ -1,11 +1,6 @@
 import Foundation
 import Sit
 
-fileprivate func writeCLIWarningStderr(_ message: String) {
-  let msg = "warning: \(message)\n"
-  try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
-}
-
 // MARK: - Pack Importer
 
 /// Parses a raw packfile (as received from `git-upload-pack`) and writes every
@@ -293,14 +288,6 @@ enum GitFetch {
         haveHashes.formUnion(refs.values)
       }
     }
-    // Add all remote-tracking refs
-    let remotesDir = gitDir.appendingPathComponent("refs/remotes", isDirectory: true)
-    if FileManager.default.fileExists(atPath: remotesDir.path) {
-      if let refs = try? collectRefsRecursive(in: remotesDir, base: gitDir, prefix: "refs/remotes/") {
-        haveHashes.formUnion(refs.values)
-      }
-    }
-
     // 4. Fetch pack from remote
     let packData: [UInt8]
     if let ssh = GitSSHTransport.parseSSHURL(rawURL) {
@@ -329,16 +316,16 @@ enum GitFetch {
     }
 
     if result.unresolvedDeltas > 0 {
-      writeCLIWarningStderr(
-        "\(result.unresolvedDeltas) delta objects could not be resolved")
+      fputs("warning: \(result.unresolvedDeltas) delta objects could not be resolved\n", stderr)
     }
 
     // 6. Update remote-tracking refs
     var fetchedRefs: [String: String] = [:]
     for (refName, sha20) in fetchRefs {
       let shaHex = GitHex.encodeLower(sha20)
-      let willUpdate = result.importedSHAs.contains(shaHex) || haveHashes.contains(shaHex)
-      if willUpdate {
+      let objectExists = result.importedSHAs.contains(shaHex)
+        || (try? GitObjectDatabase.readObject(gitDir: gitDir, packs: packs, sha20: sha20)) != nil
+      if objectExists {
         // Only update tracking ref if we have the object
         let trackingRef = remoteTrackingRef(remoteName: remote.name, remoteRef: refName)
         if let trackingRef = trackingRef {
@@ -416,34 +403,6 @@ enum GitFetch {
         .trimmingCharacters(in: .whitespacesAndNewlines)
       if raw.count == 40 {
         refs[prefix + entry.lastPathComponent] = raw.lowercased()
-      }
-    }
-    return refs
-  }
-
-  /// Collect all refs recursively in a directory tree.
-  private static func collectRefsRecursive(
-    in dir: URL, base: URL, prefix: String
-  ) throws -> [String: String] {
-    var refs: [String: String] = [:]
-    let fm = FileManager.default
-    guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
-      return refs
-    }
-    for entry in entries {
-      var isDir: ObjCBool = false
-      guard fm.fileExists(atPath: entry.path, isDirectory: &isDir) else { continue }
-      if isDir.boolValue {
-        let sub = try collectRefsRecursive(
-          in: entry, base: base,
-          prefix: prefix + entry.lastPathComponent + "/")
-        refs.merge(sub) { _, new in new }
-      } else {
-        let raw = try String(contentsOf: entry, encoding: .utf8)
-          .trimmingCharacters(in: .whitespacesAndNewlines)
-        if raw.count == 40 {
-          refs[prefix + entry.lastPathComponent] = raw.lowercased()
-        }
       }
     }
     return refs
@@ -736,19 +695,19 @@ enum GitPull {
           } else {
             // File-level conflict: take ours (simple strategy)
             mergedEntries.append((o.mode, name, o.sha20))
-            writeCLIWarningStderr("conflict in '\(name)', keeping our version")
+            warn("conflict in '\(name)', keeping our version")
           }
         } else {
           // Both added same-named entry differently — take ours
           mergedEntries.append((o.mode, name, o.sha20))
-          writeCLIWarningStderr("both added '\(name)' differently, keeping our version")
+          warn("both added '\(name)' differently, keeping our version")
         }
       case let (.some(o), nil):
         // Only we have it — keep if changed from base, drop if deleted by them
         if base == nil || (base?.mode != o.mode || base?.sha20 != o.sha20) {
           // Check if they deleted it intentionally
           if base != nil {
-            writeCLIWarningStderr("'\(name)' deleted by them, modified by us — keeping ours")
+            warn("'\(name)' deleted by them, modified by us — keeping ours")
           }
           mergedEntries.append((o.mode, name, o.sha20))
         }
@@ -757,7 +716,7 @@ enum GitPull {
         // Only they have it — take theirs if changed from base
         if base == nil || (base?.mode != t.mode || base?.sha20 != t.sha20) {
           if base != nil {
-            writeCLIWarningStderr("'\(name)' deleted by us, modified by them — taking theirs")
+            warn("'\(name)' deleted by us, modified by them — taking theirs")
           }
           mergedEntries.append((t.mode, name, t.sha20))
         }
@@ -770,6 +729,11 @@ enum GitPull {
     let treeSHA = try GitLooseObjectWriter.writeTree(
       gitDir: gitDir, entries: mergedEntries)
     return GitHex.encodeLower(treeSHA)
+  }
+
+  private static func warn(_ message: String) {
+    let msg = "warning: \(message)\n"
+    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
   }
 
   private struct TreeEntry {
