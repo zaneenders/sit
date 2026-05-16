@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import Subprocess
+import Testing
 
 @testable import Sit
 
@@ -37,7 +37,8 @@ struct GitIndexStagingTests: ~Copyable {
       try Data("alpha\n".utf8).write(to: work.appendingPathComponent("a.txt"))
       try Data("beta\n".utf8).write(to: work.appendingPathComponent("b.txt"))
       var index = GitIndex()
-      try index.stage(gitDir: gitDir, workTree: work,
+      try index.stage(
+        gitDir: gitDir, workTree: work,
         files: [work.appendingPathComponent("a.txt"), work.appendingPathComponent("b.txt")])
       try index.write(to: gitDir.appendingPathComponent("index"))
       let reloaded = try GitIndex.load(from: gitDir.appendingPathComponent("index"))
@@ -64,7 +65,8 @@ struct GitIndexStagingTests: ~Copyable {
       try index.stage(gitDir: gitDir, workTree: work, files: [file])
       try index.write(to: gitDir.appendingPathComponent("index"))
       let author = GitLocalConfig.UserIdentity(name: "sit", email: "sit@test")
-      let commitHex = try GitStaging.commit(gitDir: gitDir, workTree: work,
+      let commitHex = try GitStaging.commit(
+        gitDir: gitDir, workTree: work,
         message: "from index", author: author, committer: author)
       #expect(try await Self.runGit(git, arguments: ["-C", work.path, "fsck", "--strict"]) == 0)
       let head = try await Self.runGitStdout(git, arguments: ["-C", work.path, "rev-parse", "HEAD"])

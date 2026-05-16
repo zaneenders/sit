@@ -24,8 +24,7 @@ public struct PackIndexV2: Sendable {
         }
         return off
       }
-      if c < 0 { lo = mid + 1 }
-      else { hi = mid }
+      if c < 0 { lo = mid + 1 } else { hi = mid }
     }
     return nil
   }

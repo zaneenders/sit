@@ -7,7 +7,8 @@ public enum GitInit {
   /// unconditionally on Darwin; they are harmless on other platforms.
   #if os(macOS)
   public static let defaultConfigBytes: [UInt8] = Array(
-    "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tignorecase = true\n\tprecomposeunicode = true\n".utf8
+    "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tignorecase = true\n\tprecomposeunicode = true\n"
+      .utf8
   )
   #else
   public static let defaultConfigBytes: [UInt8] = Array(
@@ -65,7 +66,8 @@ public enum GitInit {
       "refs", "refs/heads", "refs/tags",
     ]
     for rel in dirs {
-      try fm.createDirectory(at: gitDir.appendingPathComponent(rel, isDirectory: true), withIntermediateDirectories: true)
+      try fm.createDirectory(
+        at: gitDir.appendingPathComponent(rel, isDirectory: true), withIntermediateDirectories: true)
     }
   }
 

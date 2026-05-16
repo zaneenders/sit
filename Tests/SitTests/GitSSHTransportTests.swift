@@ -69,10 +69,12 @@ struct GitSSHTransportTests: ~Copyable {
   @Test func parsePushStatusSkipsRefAdvertisement() {
     var body: [UInt8] = []
     // Fake ref advertisement
-    body.append(contentsOf: GitPktLine.encode(
-      "3b18e512dba79e4c8300dd08aeb37f8e728b8dad refs/heads/main\0report-status\n"))
-    body.append(contentsOf: GitPktLine.encode(
-      "dd7e1c6f0fefe118f0b63d9f10908c460aa317a6 refs/heads/dev\n"))
+    body.append(
+      contentsOf: GitPktLine.encode(
+        "3b18e512dba79e4c8300dd08aeb37f8e728b8dad refs/heads/main\0report-status\n"))
+    body.append(
+      contentsOf: GitPktLine.encode(
+        "dd7e1c6f0fefe118f0b63d9f10908c460aa317a6 refs/heads/dev\n"))
     body.append(contentsOf: GitPktLine.flush)  // end of ref advert
     // Status report
     body.append(contentsOf: GitPktLine.encode("unpack ok\n"))
@@ -85,8 +87,9 @@ struct GitSSHTransportTests: ~Copyable {
 
   @Test func parsePushStatusRejectsNgRef() {
     var body: [UInt8] = []
-    body.append(contentsOf: GitPktLine.encode(
-      "3b18e512dba79e4c8300dd08aeb37f8e728b8dad refs/heads/main\0report-status\n"))
+    body.append(
+      contentsOf: GitPktLine.encode(
+        "3b18e512dba79e4c8300dd08aeb37f8e728b8dad refs/heads/main\0report-status\n"))
     body.append(contentsOf: GitPktLine.flush)
     body.append(contentsOf: GitPktLine.encode("unpack ok\n"))
     body.append(contentsOf: GitPktLine.encode("ng refs/heads/main non-fast-forward\n"))

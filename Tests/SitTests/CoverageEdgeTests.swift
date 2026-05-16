@@ -25,8 +25,10 @@ struct CoverageEdgeTests: ~Copyable {
 
   @Test func zlibHeaderRejectsTruncatedStreamAfterHeader() {
     let twoBytes: [UInt8] = [0x78, 0x9c]
-    #expect(throws: ZlibHeaderError.message(
-      "truncated stream: expected deflate block prefix after zlib header")) {
+    #expect(
+      throws: ZlibHeaderError.message(
+        "truncated stream: expected deflate block prefix after zlib header")
+    ) {
       _ = try ZlibHeader(parsingCompressedBytes: twoBytes)
     }
   }
@@ -36,8 +38,10 @@ struct CoverageEdgeTests: ~Copyable {
     var invalid: [UInt8] = [0x78, 0x9c, 0x00]
     // 0x77: CM=7, CINFO=7
     invalid[0] = 0x77
-    #expect(throws: ZlibHeaderError.message(
-      "Invalid zlib CM: RFC 1950 requires CM=8 (deflate), got 77 (CM=7)")) {
+    #expect(
+      throws: ZlibHeaderError.message(
+        "Invalid zlib CM: RFC 1950 requires CM=8 (deflate), got 77 (CM=7)")
+    ) {
       _ = try ZlibHeader(parsingCompressedBytes: invalid)
     }
   }
@@ -71,7 +75,7 @@ struct CoverageEdgeTests: ~Copyable {
   @Test func zlibHeaderRejectsFDICT() throws {
     // FDICT is bit 5 (0x20) of FLG. Need valid CM/CINFO/FCHECK otherwise.
     // 0x78 (CM=8, CINFO=7). 0x78*256=30720. 30720%31=30. Need flg%31=1 and FDICT=1.
-    // flg = 0x20 | 1 = 0x21 = 33. 33%31=2 ≠ 1. 
+    // flg = 0x20 | 1 = 0x21 = 33. 33%31=2 ≠ 1.
     // Try flg = 0x20 | 0x20 = 0x40? No. Let's find flg where flg%31==1 and bit5 set.
     // 31*N + 1 with bit 5 set: N=1→32 (bit5 set) → flg=32=0x20. 0x20%31=1 ✓. FDICT=1.
     let bytes: [UInt8] = [0x78, 0x20, 0x00]

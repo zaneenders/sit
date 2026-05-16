@@ -39,7 +39,8 @@ public enum ZlibLooseObject {
     _ = try ZlibHeader.Header(parsingCompressedBytes: bytes)
     let deflateSlice = Array(bytes[2..<(bytes.count - 4)])
     let plain = try DeflateInflate.inflate(deflateSlice, maxOutputSize: maxOutputSize)
-    let stored = UInt32(bytes[bytes.count - 4]) << 24
+    let stored =
+      UInt32(bytes[bytes.count - 4]) << 24
       | UInt32(bytes[bytes.count - 3]) << 16
       | UInt32(bytes[bytes.count - 2]) << 8
       | UInt32(bytes[bytes.count - 1])
@@ -73,9 +74,9 @@ public enum ZlibLooseObject {
     }
     let stored =
       UInt32(bytes[adlerBase]) << 24
-        | UInt32(bytes[adlerBase + 1]) << 16
-        | UInt32(bytes[adlerBase + 2]) << 8
-        | UInt32(bytes[adlerBase + 3])
+      | UInt32(bytes[adlerBase + 1]) << 16
+      | UInt32(bytes[adlerBase + 2]) << 8
+      | UInt32(bytes[adlerBase + 3])
     let computed = Adler32.checksum(of: plain)
     guard stored == computed else {
       throw InflateError.adler32Mismatch

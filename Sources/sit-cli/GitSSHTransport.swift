@@ -1,8 +1,8 @@
-import Foundation
 import Crypto
-import NIOSSH
+import Foundation
 import NIOCore
 import NIOPosix
+import NIOSSH
 import Sit
 
 /// Git smart protocol over SSH using swift-nio-ssh.
@@ -105,7 +105,8 @@ enum GitSSHTransport {
 
     var request: [UInt8] = []
     for (old, new, ref) in refUpdates {
-      let line = capStr.isEmpty
+      let line =
+        capStr.isEmpty
         ? "\(old) \(new) \(ref)\n"
         : "\(old) \(new) \(ref)\0\(capStr)\n"
       request.append(contentsOf: GitPktLine.encode(Array(line.utf8)))

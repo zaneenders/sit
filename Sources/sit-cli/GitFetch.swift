@@ -46,7 +46,8 @@ enum GitPackImporter {
   ) throws -> ImportResult {
     guard packData.count >= 12 else { throw Error.truncatedPack(packData.count) }
     guard packData[0] == 0x50, packData[1] == 0x41,
-          packData[2] == 0x43, packData[3] == 0x4b else {
+      packData[2] == 0x43, packData[3] == 0x4b
+    else {
       throw Error.badPackSignature
     }
     let version = readBigEndianUInt32(packData, 4)
@@ -128,7 +129,8 @@ enum GitPackImporter {
           basePayload = known.value.payload
           baseType = known.value.type
         } else if let (typeStr, payload) = try? GitObjectDatabase.readObject(
-          gitDir: gitDir, packs: packs, sha20: baseSHA) {
+          gitDir: gitDir, packs: packs, sha20: baseSHA)
+        {
           basePayload = payload
           baseType = typeStrToInt(typeStr)
         } else {
@@ -323,7 +325,8 @@ enum GitFetch {
     var fetchedRefs: [String: String] = [:]
     for (refName, sha20) in fetchRefs {
       let shaHex = GitHex.encodeLower(sha20)
-      let objectExists = result.importedSHAs.contains(shaHex)
+      let objectExists =
+        result.importedSHAs.contains(shaHex)
         || (try? GitObjectDatabase.readObject(gitDir: gitDir, packs: packs, sha20: sha20)) != nil
       if objectExists {
         // Only update tracking ref if we have the object
@@ -455,8 +458,9 @@ enum GitPull {
 
     // 2. Resolve upstream remote and merge ref
     guard let bc = try GitRemoteConfig.readBranchConfig(gitDir: gitDir, branch: branch),
-          let upstreamRemoteName = remoteName ?? bc.remoteName,
-          let mergeRef = bc.mergeRef else {
+      let upstreamRemoteName = remoteName ?? bc.remoteName,
+      let mergeRef = bc.mergeRef
+    else {
       throw Error.noUpstreamConfigured(branch)
     }
 
@@ -536,8 +540,9 @@ enum GitPull {
       if !visited.insert(sha).inserted { continue }
 
       let sha20 = try GitHex.decode20(sha)
-      guard let (type, payload) = try? GitObjectDatabase.readObject(
-        gitDir: gitDir, packs: packs, sha20: sha20),
+      guard
+        let (type, payload) = try? GitObjectDatabase.readObject(
+          gitDir: gitDir, packs: packs, sha20: sha20),
         type == "commit"
       else { continue }
 
@@ -560,8 +565,9 @@ enum GitPull {
     let packs = try GitObjectDatabase.openAllPacks(gitDir: gitDir)
 
     // Find merge base
-    guard let baseHex = try findMergeBase(
-      gitDir: gitDir, packs: packs, a: ourHex, b: theirHex)
+    guard
+      let baseHex = try findMergeBase(
+        gitDir: gitDir, packs: packs, a: ourHex, b: theirHex)
     else {
       throw Error.mergeConflict("No common ancestor found")
     }
@@ -669,10 +675,10 @@ enum GitPull {
       let theirs = theirMap[name]
 
       switch (ours, theirs) {
-      case let (.some(o), .some(t)) where o.mode == t.mode && o.sha20 == t.sha20:
+      case (.some(let o), .some(let t)) where o.mode == t.mode && o.sha20 == t.sha20:
         // Both same — take either
         mergedEntries.append((o.mode, name, o.sha20))
-      case let (.some(o), .some(t)):
+      case (.some(let o), .some(let t)):
         // Both modified — check if one side matches base
         if let b = base, b.mode == o.mode && b.sha20 == o.sha20 {
           // Only theirs changed
@@ -687,7 +693,7 @@ enum GitPull {
             let mergedHex = try threeWayTreeMerge(
               gitDir: gitDir,
               packs: packs,
-              baseTreeHex: base.flatMap { GitHex.encodeLower($0.sha20) } ?? "4b825dc642cb6eb9a060e54bf899d44e8e2a91c2", // empty tree
+              baseTreeHex: base.flatMap { GitHex.encodeLower($0.sha20) } ?? "4b825dc642cb6eb9a060e54bf899d44e8e2a91c2",  // empty tree
               ourTreeHex: GitHex.encodeLower(o.sha20),
               theirTreeHex: GitHex.encodeLower(t.sha20))
             let mergedSHA = try GitHex.decode20(mergedHex)
@@ -702,7 +708,7 @@ enum GitPull {
           mergedEntries.append((o.mode, name, o.sha20))
           warn("both added '\(name)' differently, keeping our version")
         }
-      case let (.some(o), nil):
+      case (.some(let o), nil):
         // Only we have it — keep if changed from base, drop if deleted by them
         if base == nil || (base?.mode != o.mode || base?.sha20 != o.sha20) {
           // Check if they deleted it intentionally
@@ -711,8 +717,8 @@ enum GitPull {
           }
           mergedEntries.append((o.mode, name, o.sha20))
         }
-        // else: we deleted it, they didn't touch it — keep deleted
-      case let (nil, .some(t)):
+      // else: we deleted it, they didn't touch it — keep deleted
+      case (nil, .some(let t)):
         // Only they have it — take theirs if changed from base
         if base == nil || (base?.mode != t.mode || base?.sha20 != t.sha20) {
           if base != nil {
@@ -720,9 +726,9 @@ enum GitPull {
           }
           mergedEntries.append((t.mode, name, t.sha20))
         }
-        // else: they deleted it, we didn't touch it — keep deleted
+      // else: they deleted it, we didn't touch it — keep deleted
       case (nil, nil):
-        break // Both deleted — fine
+        break  // Both deleted — fine
       }
     }
 
@@ -786,8 +792,9 @@ enum GitPull {
       queue.removeFirst()
       if !ancestorsOfA.insert(sha).inserted { continue }
       let sha20 = try GitHex.decode20(sha)
-      guard let (type, payload) = try? GitObjectDatabase.readObject(
-        gitDir: gitDir, packs: packs, sha20: sha20),
+      guard
+        let (type, payload) = try? GitObjectDatabase.readObject(
+          gitDir: gitDir, packs: packs, sha20: sha20),
         type == "commit"
       else { continue }
       let (_, parents) = parseCommit(payload)
@@ -802,8 +809,9 @@ enum GitPull {
       if ancestorsOfA.contains(sha) { return sha }
       if !visitedB.insert(sha).inserted { continue }
       let sha20 = try GitHex.decode20(sha)
-      guard let (type, payload) = try? GitObjectDatabase.readObject(
-        gitDir: gitDir, packs: packs, sha20: sha20),
+      guard
+        let (type, payload) = try? GitObjectDatabase.readObject(
+          gitDir: gitDir, packs: packs, sha20: sha20),
         type == "commit"
       else { continue }
       let (_, parents) = parseCommit(payload)
@@ -855,8 +863,9 @@ enum GitPull {
         // Blob: write file
         let (_, blobPayload) = try GitObjectDatabase.readObject(
           gitDir: gitDir, packs: packs, sha20: entry.sha20)
-        try fm.createDirectory(at: fileURL.deletingLastPathComponent(),
-                               withIntermediateDirectories: true)
+        try fm.createDirectory(
+          at: fileURL.deletingLastPathComponent(),
+          withIntermediateDirectories: true)
         try Data(blobPayload).write(to: fileURL, options: .atomic)
       }
     }
@@ -885,15 +894,16 @@ enum GitPull {
           gitDir: gitDir, workTree: workTree, packs: packs,
           treeHex: GitHex.encodeLower(entry.sha20), prefix: path, index: &index)
       } else {
-        index.insertEntry(GitIndex.RawEntry(
-          path: path,
-          ctimeSec: 0, ctimeNSec: 0,
-          mtimeSec: 0, mtimeNSec: 0,
-          dev: 0, ino: 0,
-          mode: modeStringToUInt32(entry.mode),
-          uid: 0, gid: 0,
-          size: 0,
-          sha: entry.sha20))
+        index.insertEntry(
+          GitIndex.RawEntry(
+            path: path,
+            ctimeSec: 0, ctimeNSec: 0,
+            mtimeSec: 0, mtimeNSec: 0,
+            dev: 0, ino: 0,
+            mode: modeStringToUInt32(entry.mode),
+            uid: 0, gid: 0,
+            size: 0,
+            sha: entry.sha20))
       }
     }
   }

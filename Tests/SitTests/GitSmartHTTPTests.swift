@@ -100,7 +100,7 @@ struct GitSmartHTTPTests: ~Copyable {
 
   @Test func parseFetchResponse_directPackNoPktLines() {
     // Server sends packfile without any ACK/NAK preamble
-    let packBytes = Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0] // header, obj count 0
+    let packBytes = Self.packMagic + [0, 0, 0, 2, 0, 0, 0, 0]  // header, obj count 0
     let result = GitSmartHTTP.parseFetchResponse(packBytes)
     #expect(result == packBytes)
   }

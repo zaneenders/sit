@@ -21,7 +21,9 @@ struct GitPackImporterTests: ~Copyable {
   @Test func rejectsBadSignature() throws {
     var pack = [UInt8](repeating: 0, count: 20)
     pack[0] = 0x58  // 'X' instead of 'P'
-    pack[1] = 0x41; pack[2] = 0x43; pack[3] = 0x4b
+    pack[1] = 0x41
+    pack[2] = 0x43
+    pack[3] = 0x4b
     #expect(throws: GitPackImporter.Error.badPackSignature) {
       _ = try GitPackImporter.importPack(
         gitDir: URL(fileURLWithPath: "/dev/null"), packData: pack, packs: [])
@@ -31,8 +33,8 @@ struct GitPackImporterTests: ~Copyable {
   @Test func rejectsWrongVersion() throws {
     // PACK + version=3 + count=1 + 12 trailing zeros (for length ≥12)
     var pack: [UInt8] = [0x50, 0x41, 0x43, 0x4b]  // PACK
-    pack += [0, 0, 0, 3]   // version = 3
-    pack += [0, 0, 0, 1]   // objectCount = 1
+    pack += [0, 0, 0, 3]  // version = 3
+    pack += [0, 0, 0, 1]  // objectCount = 1
     pack += [UInt8](repeating: 0, count: 8)
     #expect(throws: GitPackImporter.Error.unknownPackVersion(3)) {
       _ = try GitPackImporter.importPack(
@@ -43,8 +45,8 @@ struct GitPackImporterTests: ~Copyable {
   @Test func rejectsZeroObjectCount() throws {
     // PACK v2 + 0 objects + 20-byte SHA trailer
     var pack: [UInt8] = [0x50, 0x41, 0x43, 0x4b]  // PACK
-    pack += [0, 0, 0, 2]   // version = 2
-    pack += [0, 0, 0, 0]   // objectCount = 0
+    pack += [0, 0, 0, 2]  // version = 2
+    pack += [0, 0, 0, 0]  // objectCount = 0
     pack += [UInt8](repeating: 0, count: 20)  // SHA trailer (wrong but passes size check)
     #expect(throws: GitPackImporter.Error.emptyPack) {
       _ = try GitPackImporter.importPack(
@@ -136,7 +138,8 @@ struct GitPackImporterTests: ~Copyable {
       // Delete loose objects
       for sha20 in sha20s {
         let hex = GitHex.encodeLower(sha20)
-        let path = gitDir
+        let path =
+          gitDir
           .appendingPathComponent("objects/\(String(hex.prefix(2)))/\(String(hex.dropFirst(2)))")
         try? FileManager.default.removeItem(at: path)
       }
@@ -171,7 +174,8 @@ struct GitPackImporterTests: ~Copyable {
       // Delete loose objects
       for sha20 in [blobSHA, treeSHA] {
         let hex = GitHex.encodeLower(sha20)
-        let path = gitDir
+        let path =
+          gitDir
           .appendingPathComponent("objects/\(String(hex.prefix(2)))/\(String(hex.dropFirst(2)))")
         try? FileManager.default.removeItem(at: path)
       }

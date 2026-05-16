@@ -64,7 +64,9 @@ struct SitAdd: ParsableCommand {
     abstract: "Stage file contents (writes blobs and updates the index)."
   )
 
-  @Flag(name: [.customShort("A"), .customLong("all")], help: "Stage the whole work tree (like git add --all); remove index entries for deleted files.")
+  @Flag(
+    name: [.customShort("A"), .customLong("all")],
+    help: "Stage the whole work tree (like git add --all); remove index entries for deleted files.")
   var all = false
 
   @Argument(help: "Files or directories to stage (omit when using --all / -A).")
@@ -190,7 +192,7 @@ struct SitCommit: ParsableCommand {
     let author: GitLocalConfig.UserIdentity
     let committer: GitLocalConfig.UserIdentity
     switch (authorName, authorEmail) {
-    case let (.some(n), .some(e)) where !n.isEmpty && !e.isEmpty:
+    case (.some(let n), .some(let e)) where !n.isEmpty && !e.isEmpty:
       author = GitLocalConfig.UserIdentity(name: n, email: e)
       committer = author
     case (nil, nil):

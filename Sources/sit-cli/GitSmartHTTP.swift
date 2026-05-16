@@ -1,7 +1,7 @@
-import Foundation
 import AsyncHTTPClient
-import NIOHTTP1
+import Foundation
 import NIOCore
+import NIOHTTP1
 import Sit
 
 /// Git smart HTTP protocol client for `git-receive-pack` (push) and
@@ -102,7 +102,8 @@ enum GitSmartHTTP {
       // Parse "<sha> <name>"
       let frontParts = front.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
       let shaStr = String(frontParts[0]).trimmingCharacters(in: .whitespaces)
-      let refName = frontParts.count > 1
+      let refName =
+        frontParts.count > 1
         ? String(frontParts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
 
       let sha20: [UInt8]
@@ -184,7 +185,8 @@ enum GitSmartHTTP {
     let response = try await client.execute(request, timeout: .seconds(300))
     guard response.status == .ok else {
       let errorBody = try? await response.body.collect(upTo: 4096)
-      let errorMsg = errorBody.flatMap { String(decoding: $0.readableBytesView, as: UTF8.self) }
+      let errorMsg =
+        errorBody.flatMap { String(decoding: $0.readableBytesView, as: UTF8.self) }
         ?? ""
       throw GitSmartHTTPError.badResponseStatusWithBody(response.status.code, errorMsg)
     }
@@ -209,16 +211,18 @@ enum GitSmartHTTP {
     while pos < data.count {
       // Check for "PACK" magic before attempting pkt-line decode
       if pos + 4 <= data.count,
-         data[pos] == 0x50, data[pos+1] == 0x41,
-         data[pos+2] == 0x43, data[pos+3] == 0x4b {
+        data[pos] == 0x50, data[pos + 1] == 0x41,
+        data[pos + 2] == 0x43, data[pos + 3] == 0x4b
+      {
         return Array(data[pos...])
       }
 
       guard let (_, consumed) = GitPktLine.decodeOne(from: data, at: pos) else {
         // Can't parse pkt-line — scan forward for PACK
         while pos + 4 <= data.count {
-          if data[pos] == 0x50, data[pos+1] == 0x41,
-             data[pos+2] == 0x43, data[pos+3] == 0x4b {
+          if data[pos] == 0x50, data[pos + 1] == 0x41,
+            data[pos + 2] == 0x43, data[pos + 3] == 0x4b
+          {
             return Array(data[pos...])
           }
           pos += 1
@@ -287,7 +291,8 @@ enum GitSmartHTTP {
     let response = try await client.execute(request, timeout: .seconds(300))
     guard response.status == .ok else {
       let errorBody = try? await response.body.collect(upTo: 4096)
-      let errorMsg = errorBody.flatMap { String(decoding: $0.readableBytesView, as: UTF8.self) }
+      let errorMsg =
+        errorBody.flatMap { String(decoding: $0.readableBytesView, as: UTF8.self) }
         ?? ""
       throw GitSmartHTTPError.badResponseStatusWithBody(response.status.code, errorMsg)
     }

@@ -1,7 +1,7 @@
 import Foundation
-import Testing
 import Subprocess
 import System
+import Testing
 
 @testable import Sit
 
@@ -170,7 +170,8 @@ struct SitCLIProcessTests: ~Copyable {
       // status after commit: should be clean
       let (_, statusAfter, _) = try await Self.runSit(
         executable: sitURL.path, workingDirectory: work, arguments: ["status"])
-      #expect(!statusAfter.contains("hello.txt"),
+      #expect(
+        !statusAfter.contains("hello.txt"),
         "status should be clean after commit, got: \(statusAfter)")
     }
   }
@@ -308,7 +309,8 @@ struct SitCLIProcessTests: ~Copyable {
   }
 
   /// Runs `sit` with a working directory (sit doesn't understand -C).
-  private static func runSitQuiet(executable: String, workingDirectory: URL, arguments: [String]) async throws -> Int32 {
+  private static func runSitQuiet(executable: String, workingDirectory: URL, arguments: [String]) async throws -> Int32
+  {
     let record = try await Subprocess.run(
       .name(executable),
       arguments: Arguments(arguments),

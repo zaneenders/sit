@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import Subprocess
+import Testing
 
 @testable import Sit
 
