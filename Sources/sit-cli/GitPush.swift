@@ -121,9 +121,15 @@ enum GitPush {
       tipHex: ourSHA,
       remoteHexes: remoteSHAsToAvoid)
 
+    // 7. Nothing to push if remote is already up-to-date
+    if objects.isEmpty {
+      print("Everything up-to-date")
+      return
+    }
+
     let packResult = try GitPackWriter.write(objects: objects)
 
-    // 7. Send to remote (dispatch on transport)
+    // 8. Send to remote (dispatch on transport)
     let results: [String]
     if let ssh = detectSSH(rawURL) {
       results = try await GitSSHTransport.push(
@@ -139,7 +145,7 @@ enum GitPush {
         capabilities: advert.capabilities)
     }
 
-    // 8. Report results
+    // 9. Report results
     var ok = true
     for line in results {
       print(line)
@@ -147,7 +153,7 @@ enum GitPush {
     }
     guard ok else { throw Error.pushRejected("Push rejected by remote") }
 
-    // 9. Update remote-tracking refs
+    // 10. Update remote-tracking refs
     for update in refUpdates {
       let refName = update.refName
       guard refName.hasPrefix("refs/heads/") else { continue }

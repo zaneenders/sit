@@ -1,15 +1,19 @@
-import Subprocess
+import Foundation
+import Crypto
+import NIOSSH
+import NIOCore
+import NIOPosix
 import Sit
 
-/// Git smart protocol over SSH transport.
+/// Git smart protocol over SSH using swift-nio-ssh.
 ///
-/// Spawns `ssh` to run `git-receive-pack` / `git-upload-pack` on the remote,
-/// then speaks pkt-line over stdin/stdout — the same format as smart HTTP.
+/// Opens a single TCP connection per operation, authenticates with the user's
+/// ed25519 key from ~/.ssh/id_ed25519, runs git-upload-pack / git-receive-pack
+/// in a session channel, and exchanges pkt-line frames over that channel.
 enum GitSSHTransport {
 
   // MARK: - SSH URL parsing
 
-  /// Parsed components of a Git SSH URL.
   struct SSHURL: Equatable {
     let host: String
     let user: String
@@ -18,7 +22,6 @@ enum GitSSHTransport {
 
   /// Parse `git@github.com:user/repo.git` or `ssh://git@github.com/user/repo.git`.
   static func parseSSHURL(_ url: String) -> SSHURL? {
-    // ssh://git@host/path
     if url.hasPrefix("ssh://") {
       let rest = String(url.dropFirst(6))
       let parts = rest.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false)
@@ -32,7 +35,6 @@ enum GitSSHTransport {
         return SSHURL(host: String(huParts[0]), user: "git", path: path)
       }
     }
-    // git@host:path
     if url.hasPrefix("git@") {
       let rest = String(url.dropFirst(4))
       let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
@@ -42,46 +44,32 @@ enum GitSSHTransport {
     return nil
   }
 
-  // MARK: - Ref advertisement
+  // MARK: - Git protocol operations
 
-  /// Get the ref advertisement from the remote by running
-  /// `ssh <user>@<host> "git-receive-pack '<path>'"` and parsing the pkt-line output.
+  /// Read the ref advertisement for push (git-receive-pack).
   static func advertiseRefs(ssh: SSHURL) async throws -> GitSmartHTTP.RefAdvertisement {
-    let command = "git-receive-pack '\(ssh.path)'"
-    let data = try await sshInvoke(host: ssh.host, user: ssh.user, command: command)
-    return GitSmartHTTP.parseRefAdvertisement(data)
+    let bytes = try await run(ssh: ssh, service: "git-receive-pack", input: [])
+    return GitSmartHTTP.parseRefAdvertisement(bytes)
   }
 
-  /// Get the fetch ref advertisement by running
-  /// `ssh <user>@<host> "git-upload-pack '<path>'"`.
+  /// Read the ref advertisement for fetch (git-upload-pack).
   static func advertiseFetchRefs(ssh: SSHURL) async throws -> GitSmartHTTP.RefAdvertisement {
-    let command = "git-upload-pack '\(ssh.path)'"
-    let data = try await sshInvoke(host: ssh.host, user: ssh.user, command: command)
-    return GitSmartHTTP.parseRefAdvertisement(data)
+    let bytes = try await run(ssh: ssh, service: "git-upload-pack", input: [])
+    return GitSmartHTTP.parseRefAdvertisement(bytes)
   }
 
-  // MARK: - Fetch
-
-  /// Negotiate and fetch a packfile from the remote over SSH.
-  ///
-  /// Protocol (git-upload-pack over SSH):
-  /// 1. Server sends ref advertisement → we already parsed it
-  /// 2. We reconnect and send want/have pkt-lines + done + flush
-  /// 3. Server sends ACK/NAK + packfile
+  /// Fetch a packfile from the remote.
   static func fetch(
     ssh: SSHURL,
     wantHashes: [String],
     haveHashes: [String] = [],
     capabilities: Set<String> = []
   ) async throws -> [UInt8] {
-    let command = "git-upload-pack '\(ssh.path)'"
-
-    let supportedCaps = capabilities.filter { cap in
-      ["multi_ack", "multi_ack_detailed", "thin-pack", "ofs-delta"].contains(cap)
+    let supportedCaps = capabilities.filter {
+      ["multi_ack", "multi_ack_detailed", "thin-pack", "ofs-delta"].contains($0)
     }
 
-    var requestBody: [UInt8] = []
-
+    var request: [UInt8] = []
     var firstWant = true
     for sha in wantHashes {
       let line: String
@@ -91,136 +79,359 @@ enum GitSSHTransport {
       } else {
         line = "want \(sha)\n"
       }
-      requestBody.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+      request.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
     }
-
     for sha in haveHashes {
-      requestBody.append(contentsOf: GitPktLine.encode(Array("have \(sha)\n".utf8)))
+      request.append(contentsOf: GitPktLine.encode(Array("have \(sha)\n".utf8)))
     }
+    request.append(contentsOf: GitPktLine.encode("done\n"))
+    request.append(contentsOf: GitPktLine.flush)
 
-    requestBody.append(contentsOf: GitPktLine.encode("done\n"))
-    requestBody.append(contentsOf: GitPktLine.flush)
-
-    let responseBytes = try await sshInvokeWithInput(
-      host: ssh.host,
-      user: ssh.user,
-      command: command,
-      input: requestBody)
-
+    let responseBytes = try await run(ssh: ssh, service: "git-upload-pack", input: request)
     return GitSmartHTTP.parseFetchResponse(responseBytes)
   }
 
-  // MARK: - Push
-
-  /// Push ref updates and a packfile to the remote over SSH.
-  ///
-  /// Protocol (git-receive-pack over SSH):
-  /// 1. Server sends ref advertisement → we parse it
-  /// 2. We send pkt-line ref commands + flush + packfile
-  /// 3. Server sends status report
+  /// Push ref updates and a packfile to the remote.
   static func push(
     ssh: SSHURL,
     refUpdates: [(oldSha40: String, newSha40: String, refName: String)],
     packData: [UInt8],
     capabilities: Set<String> = []
   ) async throws -> [String] {
-    let command = "git-receive-pack '\(ssh.path)'"
-
-    // Build the push request body (same format as smart HTTP phase 2)
-    var requestBody: [UInt8] = []
-
-    let capStr = capabilities.filter { cap in
-      ["report-status", "side-band-64k", "delete-refs"].contains(cap)
+    // Omit side-band-64k: we parse plain pkt-line status only.
+    let capStr = capabilities.filter {
+      ["report-status", "delete-refs"].contains($0)
     }.joined(separator: " ")
 
+    var request: [UInt8] = []
     for (old, new, ref) in refUpdates {
-      let line: String
-      if capStr.isEmpty {
-        line = "\(old) \(new) \(ref)\n"
-      } else {
-        line = "\(old) \(new) \(ref)\0\(capStr)\n"
+      let line = capStr.isEmpty
+        ? "\(old) \(new) \(ref)\n"
+        : "\(old) \(new) \(ref)\0\(capStr)\n"
+      request.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+    }
+    request.append(contentsOf: GitPktLine.flush)
+    request.append(contentsOf: packData)
+
+    let responseBytes = try await run(ssh: ssh, service: "git-receive-pack", input: request)
+    return parsePushStatus(responseBytes)
+  }
+
+  // MARK: - Core: run a git service over SSH
+
+  /// Open an SSH connection, exec `<service> '<path>'`, write `input` to stdin,
+  /// close stdin, and return all stdout bytes.
+  private static func run(ssh: SSHURL, service: String, input: [UInt8]) async throws -> [UInt8] {
+    let key = try loadSSHKey()
+    let command = "\(service) '\(ssh.path)'"
+    return try await executeCommand(
+      host: ssh.host, port: 22, user: ssh.user,
+      privateKey: key, command: command, inputBytes: input)
+  }
+
+  private static func executeCommand(
+    host: String, port: Int, user: String,
+    privateKey: NIOSSHPrivateKey, command: String, inputBytes: [UInt8]
+  ) async throws -> [UInt8] {
+    let group = MultiThreadedEventLoopGroup.singleton
+    let eventLoop = group.next()
+    let resultPromise = eventLoop.makePromise(of: [UInt8].self)
+
+    let bootstrap = ClientBootstrap(group: group)
+      .channelInitializer { channel in
+        channel.eventLoop.makeCompletedFuture {
+          let sshConfig = SSHClientConfiguration(
+            userAuthDelegate: KeyAuthDelegate(username: user, key: privateKey),
+            serverAuthDelegate: AcceptAnyHostKey()
+          )
+          let handler = NIOSSHHandler(
+            role: .client(sshConfig),
+            allocator: channel.allocator,
+            inboundChildChannelInitializer: nil
+          )
+          try channel.pipeline.syncOperations.addHandler(handler)
+        }
       }
-      requestBody.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+      .channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
+      .connectTimeout(.seconds(30))
+
+    let channel = try await bootstrap.connect(host: host, port: port).get()
+
+    let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
+
+    let childPromise = eventLoop.makePromise(of: Channel.self)
+    sshHandler.createChannel(childPromise) { childChannel, channelType in
+      guard channelType == .session else {
+        return childChannel.eventLoop.makeFailedFuture(GitSSHError.invalidChannelType)
+      }
+      return childChannel.eventLoop.makeCompletedFuture {
+        try childChannel.pipeline.syncOperations.addHandler(
+          GitCommandHandler(
+            command: command,
+            inputBytes: inputBytes,
+            resultPromise: resultPromise)
+        )
+      }
     }
-    requestBody.append(contentsOf: GitPktLine.flush)
-    requestBody.append(contentsOf: packData)
 
-    let responseBytes = try await sshInvokeWithInput(
-      host: ssh.host,
-      user: ssh.user,
-      command: command,
-      input: requestBody)
-
-    return GitSmartHTTP.parsePushResponse(responseBytes)
+    _ = try await childPromise.futureResult.get()
+    let bytes = try await resultPromise.futureResult.get()
+    try? await channel.close().get()
+    return bytes
   }
 
-  // MARK: - SSH subprocess
+  // MARK: - SSH key loading
 
-  /// Spawn `ssh <user>@<host> <command>`, return all stdout bytes.
-  private static func sshInvoke(
-    host: String, user: String, command: String
-  ) async throws -> [UInt8] {
-    let sshArgs = buildSSHArgs(host: host, user: user, command: command)
-    return try await runSSH(arguments: sshArgs, input: nil)
+  /// Load the first available unencrypted ed25519 key from ~/.ssh/.
+  private static func loadSSHKey() throws -> NIOSSHPrivateKey {
+    let sshDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ssh")
+    for name in ["id_ed25519"] {
+      let path = sshDir.appendingPathComponent(name)
+      guard FileManager.default.fileExists(atPath: path.path),
+        let pem = try? String(contentsOf: path, encoding: .utf8)
+      else { continue }
+      if let key = try? parseEd25519Key(pem) {
+        return NIOSSHPrivateKey(ed25519Key: key)
+      }
+    }
+    throw GitSSHError.noSSHKeyFound
   }
 
-  /// Spawn `ssh …`, send `input` to stdin, return all stdout bytes.
-  private static func sshInvokeWithInput(
-    host: String, user: String, command: String, input: [UInt8]
-  ) async throws -> [UInt8] {
-    let sshArgs = buildSSHArgs(host: host, user: user, command: command)
-    return try await runSSH(arguments: sshArgs, input: input)
+  /// Parse an unencrypted OpenSSH ed25519 private key file and return the raw key.
+  private static func parseEd25519Key(_ pem: String) throws -> Curve25519.Signing.PrivateKey {
+    let b64 = pem.components(separatedBy: .newlines)
+      .filter { !$0.hasPrefix("-----") && !$0.isEmpty }
+      .joined()
+    guard let data = Data(base64Encoded: b64) else {
+      throw GitSSHError.keyParseError("invalid base64")
+    }
+
+    let bytes = Array(data)
+    var pos = 0
+
+    func readExact(_ n: Int) throws -> [UInt8] {
+      guard pos + n <= bytes.count else {
+        throw GitSSHError.keyParseError("unexpected end of data at pos \(pos)")
+      }
+      defer { pos += n }
+      return Array(bytes[pos..<(pos + n)])
+    }
+
+    func readUInt32() throws -> Int {
+      let b = try readExact(4)
+      return Int(b[0]) << 24 | Int(b[1]) << 16 | Int(b[2]) << 8 | Int(b[3])
+    }
+
+    func readString() throws -> [UInt8] {
+      let len = try readUInt32()
+      return try readExact(len)
+    }
+
+    // Magic: "openssh-key-v1\0" (15 bytes)
+    let magic = try readExact(15)
+    guard String(bytes: magic, encoding: .ascii) == "openssh-key-v1\0" else {
+      throw GitSSHError.keyParseError("not an OpenSSH private key")
+    }
+
+    let cipherBytes = try readString()
+    guard String(bytes: cipherBytes, encoding: .utf8) == "none" else {
+      throw GitSSHError.keyEncrypted
+    }
+    _ = try readString()  // kdf name
+    _ = try readString()  // kdf options
+
+    let numKeys = try readUInt32()
+    guard numKeys == 1 else {
+      throw GitSSHError.keyParseError("expected 1 key, got \(numKeys)")
+    }
+
+    _ = try readString()  // public key blob
+
+    let privateBlock = try readString()
+    let pb = privateBlock
+    var pbPos = 0
+
+    func readPBExact(_ n: Int) throws -> [UInt8] {
+      guard pbPos + n <= pb.count else {
+        throw GitSSHError.keyParseError("private block truncated")
+      }
+      defer { pbPos += n }
+      return Array(pb[pbPos..<(pbPos + n)])
+    }
+
+    func readPBUInt32() throws -> Int {
+      let b = try readPBExact(4)
+      return Int(b[0]) << 24 | Int(b[1]) << 16 | Int(b[2]) << 8 | Int(b[3])
+    }
+
+    func readPBString() throws -> [UInt8] {
+      let len = try readPBUInt32()
+      return try readPBExact(len)
+    }
+
+    let check1 = try readPBUInt32()
+    let check2 = try readPBUInt32()
+    guard check1 == check2 else {
+      throw GitSSHError.keyParseError("checksum mismatch — key may be passphrase-protected")
+    }
+
+    let keyTypeBytes = try readPBString()
+    guard String(bytes: keyTypeBytes, encoding: .utf8) == "ssh-ed25519" else {
+      throw GitSSHError.keyParseError("expected ssh-ed25519 key type")
+    }
+
+    _ = try readPBString()  // public key (repeated)
+    let privateAndPublic = try readPBString()  // 64 bytes: seed(32) + pubkey(32)
+    guard privateAndPublic.count >= 32 else {
+      throw GitSSHError.keyParseError("private key data too short")
+    }
+
+    return try Curve25519.Signing.PrivateKey(rawRepresentation: Data(privateAndPublic[0..<32]))
   }
 
-  private static func buildSSHArgs(host: String, user: String, command: String) -> [String] {
-    [
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "PasswordAuthentication=no",
-      "\(user)@\(host)",
-      command,
-    ]
+  // MARK: - Push status parsing
+
+  /// Parse the server's push status, skipping the ref advertisement that git-receive-pack
+  /// sends before reading our commands (second SSH session re-runs the command).
+  private static func parsePushStatus(_ data: [UInt8]) -> [String] {
+    let packets = GitPktLine.decode(data)
+    var lines: [String] = []
+    var pastFirstFlush = false
+    for packet in packets {
+      switch packet {
+      case .flush:
+        pastFirstFlush = true
+      case .data(let payload) where pastFirstFlush:
+        if let str = String(bytes: payload, encoding: .utf8) {
+          let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !trimmed.isEmpty { lines.append(trimmed) }
+        }
+      default:
+        break
+      }
+    }
+    return lines
+  }
+}
+
+// MARK: - NIO channel handler
+
+/// Executes a remote command over an SSH session channel.
+/// Writes `inputBytes` to stdin, closes write half, collects all stdout.
+final class GitCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
+  typealias InboundIn = SSHChannelData
+  typealias InboundOut = Never
+  typealias OutboundIn = Never
+  typealias OutboundOut = SSHChannelData
+
+  private let command: String
+  private let inputBytes: [UInt8]
+  private let resultPromise: EventLoopPromise<[UInt8]>
+  private var accumulator: [UInt8] = []
+  private var exitCode: Int?
+
+  init(command: String, inputBytes: [UInt8], resultPromise: EventLoopPromise<[UInt8]>) {
+    self.command = command
+    self.inputBytes = inputBytes
+    self.resultPromise = resultPromise
   }
 
-  /// Run `/usr/bin/ssh` with the given arguments, optionally feeding `input` to stdin.
-  /// Returns all stdout bytes. Throws on non-zero exit.
-  private static func runSSH(arguments: [String], input: [UInt8]?) async throws -> [UInt8] {
-    let record: ExecutionRecord<BytesOutput, BytesOutput>
-    if let input {
-      record = try await Subprocess.run(
-        .name("/usr/bin/ssh"),
-        arguments: Arguments(arguments),
-        input: .array(input),
-        output: .bytes(limit: 100 * 1024 * 1024),  // 100 MB
-        error: .bytes(limit: 65536))
+  func channelActive(context: ChannelHandlerContext) {
+    context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+      .flatMap { [command] _ in
+        context.triggerUserOutboundEvent(
+          SSHChannelRequestEvent.ExecRequest(command: command, wantReply: false))
+      }
+      .flatMap { [inputBytes] _ -> EventLoopFuture<Void> in
+        guard !inputBytes.isEmpty else {
+          return context.eventLoop.makeSucceededVoidFuture()
+        }
+        let buf = context.channel.allocator.buffer(bytes: inputBytes)
+        let data = SSHChannelData(type: .channel, data: .byteBuffer(buf))
+        return context.writeAndFlush(NIOAny(data))
+      }
+      .flatMap { _ in
+        context.channel.close(mode: .output)
+      }
+      .whenFailure { [resultPromise] error in
+        resultPromise.fail(error)
+      }
+  }
+
+  func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+    let sshData = unwrapInboundIn(data)
+    guard case .channel = sshData.type, case .byteBuffer(let buf) = sshData.data else { return }
+    accumulator.append(contentsOf: buf.readableBytesView)
+  }
+
+  func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+    if let exit = event as? SSHChannelRequestEvent.ExitStatus {
+      exitCode = exit.exitStatus
+    }
+    context.fireUserInboundEventTriggered(event)
+  }
+
+  func channelInactive(context: ChannelHandlerContext) {
+    if let code = exitCode, code != 0 {
+      resultPromise.fail(GitSSHError.commandFailed(exitCode: Int32(code)))
     } else {
-      record = try await Subprocess.run(
-        .name("/usr/bin/ssh"),
-        arguments: Arguments(arguments),
-        output: .bytes(limit: 100 * 1024 * 1024),
-        error: .bytes(limit: 65536))
+      resultPromise.succeed(accumulator)
     }
-
-    guard record.terminationStatus.isSuccess else {
-      let errStr = String(decoding: record.standardError, as: UTF8.self)
-      throw GitSSHError.sshFailed(
-        exitCode: sshExitCode(record.terminationStatus),
-        stderr: String(errStr.trimming { $0.isWhitespace || $0.isNewline }))
-    }
-
-    return record.standardOutput
   }
 
-  private static func sshExitCode(_ status: TerminationStatus) -> Int32 {
-    switch status {
-    case .exited(let code): return code
-    case .signaled(let sig): return -sig
+  func errorCaught(context: ChannelHandlerContext, error: Error) {
+    resultPromise.fail(error)
+    context.close(promise: nil)
+  }
+}
+
+// MARK: - Auth delegates
+
+final class KeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
+  private let username: String
+  private let key: NIOSSHPrivateKey
+  private var offered = false
+
+  init(username: String, key: NIOSSHPrivateKey) {
+    self.username = username
+    self.key = key
+  }
+
+  func nextAuthenticationType(
+    availableMethods: NIOSSHAvailableUserAuthenticationMethods,
+    nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
+  ) {
+    guard !offered, availableMethods.contains(.publicKey) else {
+      nextChallengePromise.succeed(nil)
+      return
     }
+    offered = true
+    nextChallengePromise.succeed(
+      NIOSSHUserAuthenticationOffer(
+        username: username,
+        serviceName: "ssh-connection",
+        offer: .privateKey(.init(privateKey: key))
+      )
+    )
+  }
+}
+
+final class AcceptAnyHostKey: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
+  func validateHostKey(
+    hostKey: NIOSSHPublicKey,
+    validationCompletePromise: EventLoopPromise<Void>
+  ) {
+    validationCompletePromise.succeed(())
   }
 }
 
 // MARK: - Errors
 
 enum GitSSHError: Error, Equatable {
-  case sshFailed(exitCode: Int32, stderr: String)
+  case noSSHKeyFound
+  case keyEncrypted
+  case keyParseError(String)
+  case invalidChannelType
+  case commandFailed(exitCode: Int32)
   case badSSHURL(String)
 }

@@ -8,7 +8,8 @@ struct SitCommand: AsyncParsableCommand {
     commandName: "sit",
     abstract: "Initialize a repo, stage files, show status, and create commits in a Git-compatible layout.",
     subcommands: [
-      SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self, SitPush.self, SitPull.self,
+      SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self,
+      SitFetch.self, SitPush.self, SitPull.self,
     ]
   )
 }
@@ -222,6 +223,49 @@ struct SitStatus: ParsableCommand {
     let (gitDir, workTree) = try GitRepository.discover(from: cwd)
     let text = try GitWorkdirStatusText.format(gitDir: gitDir, workTree: workTree)
     print(text, terminator: "")
+  }
+}
+
+struct SitFetch: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "fetch",
+    abstract: "Download objects and refs from a remote."
+  )
+
+  @Argument(help: "Remote name (default: upstream remote for the current branch).")
+  var remote: String?
+
+  mutating func run() async throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
+
+    // Resolve remote
+    let remotes = try GitRemoteConfig.readRemotes(gitDir: gitDir)
+    let remoteName: String
+    if let r = remote {
+      remoteName = r
+    } else if let branchRef = try GitHEAD.currentBranchRef(gitDir: gitDir) {
+      let branch = branchRef.replacingOccurrences(of: "refs/heads/", with: "")
+      guard let bc = try GitRemoteConfig.readBranchConfig(gitDir: gitDir, branch: branch),
+        let r = bc.remoteName
+      else {
+        throw ValidationError("No upstream remote configured for branch '\(branch)'.")
+      }
+      remoteName = r
+    } else {
+      throw ValidationError("Detached HEAD — pass a remote name explicitly.")
+    }
+
+    guard let remoteObj = remotes.first(where: { $0.name == remoteName }) else {
+      throw ValidationError("Remote '\(remoteName)' not found in .git/config.")
+    }
+
+    let fetched = try await GitFetch.fetch(
+      gitDir: gitDir, workTree: workTree, remote: remoteObj)
+    print("From \(remoteObj.resolvedPushURL)")
+    for (ref, sha) in fetched.sorted(by: { $0.key < $1.key }) {
+      print("  \(String(sha.prefix(7)))  \(ref)")
+    }
   }
 }
 

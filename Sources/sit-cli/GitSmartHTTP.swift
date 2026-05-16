@@ -254,8 +254,9 @@ enum GitSmartHTTP {
     var body: [UInt8] = []
 
     // Filter capabilities to only what we support
+    // Omit side-band-64k: parsePushResponse handles plain pkt-line only.
     let capStr = capabilities.filter { cap in
-      ["report-status", "side-band-64k", "delete-refs"].contains(cap)
+      ["report-status", "delete-refs"].contains(cap)
     }.joined(separator: " ")
 
     // Ref update commands

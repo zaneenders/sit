@@ -14,6 +14,8 @@ let package = Package(
     .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
     .package(url: "https://github.com/apple/swift-system.git", from: "1.4.0"),
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
+    .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+    .package(url: "https://github.com/apple/swift-nio-ssh", from: "0.13.0"),
   ],
   targets: [
     .target(
@@ -33,6 +35,9 @@ let package = Package(
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
         .product(name: "AsyncHTTPClient", package: "async-http-client"),
         .product(name: "Subprocess", package: "swift-subprocess"),
+        .product(name: "NIOSSH", package: "swift-nio-ssh"),
+        .product(name: "NIOCore", package: "swift-nio"),
+        .product(name: "NIOPosix", package: "swift-nio"),
       ],
       path: "Sources/sit-cli",
       swiftSettings: [
