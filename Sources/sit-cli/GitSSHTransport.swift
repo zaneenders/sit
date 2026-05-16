@@ -293,11 +293,13 @@ enum GitSSHTransport {
 
   /// Parse the server's push status, skipping the ref advertisement that git-receive-pack
   /// sends before reading our commands (second SSH session re-runs the command).
-  private static func parsePushStatus(_ data: [UInt8]) -> [String] {
-    let packets = GitPktLine.decode(data)
+  static func parsePushStatus(_ data: [UInt8]) -> [String] {
     var lines: [String] = []
+    var pos = 0
     var pastFirstFlush = false
-    for packet in packets {
+    while pos < data.count {
+      guard let (packet, consumed) = GitPktLine.decodeOne(from: data, at: pos) else { break }
+      pos += consumed
       switch packet {
       case .flush:
         pastFirstFlush = true
