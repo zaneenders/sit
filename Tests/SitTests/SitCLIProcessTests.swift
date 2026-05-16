@@ -1,7 +1,12 @@
 import Foundation
 import Testing
 import Subprocess
+
+#if canImport(System)
 import System
+#else
+import SystemPackage
+#endif
 
 @testable import Sit
 

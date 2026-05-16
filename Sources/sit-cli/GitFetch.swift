@@ -1,6 +1,11 @@
 import Foundation
 import Sit
 
+fileprivate func writeCLIWarningStderr(_ message: String) {
+  let msg = "warning: \(message)\n"
+  try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
+}
+
 // MARK: - Pack Importer
 
 /// Parses a raw packfile (as received from `git-upload-pack`) and writes every
@@ -324,7 +329,8 @@ enum GitFetch {
     }
 
     if result.unresolvedDeltas > 0 {
-      fputs("warning: \(result.unresolvedDeltas) delta objects could not be resolved\n", stderr)
+      writeCLIWarningStderr(
+        "\(result.unresolvedDeltas) delta objects could not be resolved")
     }
 
     // 6. Update remote-tracking refs
@@ -730,19 +736,19 @@ enum GitPull {
           } else {
             // File-level conflict: take ours (simple strategy)
             mergedEntries.append((o.mode, name, o.sha20))
-            warn("conflict in '\(name)', keeping our version")
+            writeCLIWarningStderr("conflict in '\(name)', keeping our version")
           }
         } else {
           // Both added same-named entry differently — take ours
           mergedEntries.append((o.mode, name, o.sha20))
-          warn("both added '\(name)' differently, keeping our version")
+          writeCLIWarningStderr("both added '\(name)' differently, keeping our version")
         }
       case let (.some(o), nil):
         // Only we have it — keep if changed from base, drop if deleted by them
         if base == nil || (base?.mode != o.mode || base?.sha20 != o.sha20) {
           // Check if they deleted it intentionally
           if base != nil {
-            warn("'\(name)' deleted by them, modified by us — keeping ours")
+            writeCLIWarningStderr("'\(name)' deleted by them, modified by us — keeping ours")
           }
           mergedEntries.append((o.mode, name, o.sha20))
         }
@@ -751,7 +757,7 @@ enum GitPull {
         // Only they have it — take theirs if changed from base
         if base == nil || (base?.mode != t.mode || base?.sha20 != t.sha20) {
           if base != nil {
-            warn("'\(name)' deleted by us, modified by them — taking theirs")
+            writeCLIWarningStderr("'\(name)' deleted by us, modified by them — taking theirs")
           }
           mergedEntries.append((t.mode, name, t.sha20))
         }
@@ -764,11 +770,6 @@ enum GitPull {
     let treeSHA = try GitLooseObjectWriter.writeTree(
       gitDir: gitDir, entries: mergedEntries)
     return GitHex.encodeLower(treeSHA)
-  }
-
-  private static func warn(_ message: String) {
-    let msg = "warning: \(message)\n"
-    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
   }
 
   private struct TreeEntry {
