@@ -157,7 +157,8 @@ enum GitLocalTransport {
     for item in items {
       let name = "\(prefix)/\(item.lastPathComponent)"
       var isDir: ObjCBool = false
-      fm.fileExists(atPath: item.path, isDirectory: &isDir)
+      let exists = fm.fileExists(atPath: item.path, isDirectory: &isDir)
+      guard exists else { continue }
       if isDir.boolValue {
         scanLooseRefs(at: item, prefix: name, into: &out)
       } else if let hex = try? String(contentsOf: item, encoding: .utf8)
