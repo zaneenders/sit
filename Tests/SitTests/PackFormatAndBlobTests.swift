@@ -59,37 +59,37 @@ struct PackFormatAndBlobTests: ~Copyable {
     }
   }
 
-  // MARK: - More objects from pack-58dfe777… (verify-pack corpus)
+  // MARK: - More objects from dogfood pack (verify-pack corpus)
 
   @Test func readsSecondOfsDeltaBlobFromPackfile() async throws {
     try await Self.assertPackBlobMatchesGit(
-      "8ac869349a2a5a9cee73136d3f283966ade4377f"
+      "84d55bd7c2dc77ead3b1043d8e33f43ed8d1567b"
     )
   }
 
   @Test func readsTinyOfsDeltaBlobFromPackfile() async throws {
     try await Self.assertPackBlobMatchesGit(
-      "01ce9042fe2a5132f646fd896bb9ac657519cff2"
+      "e42418b39e4e69cf8facb72c1da091490310073e"
     )
   }
 
   @Test func readsOfsDeltaTreeFromPackfile() async throws {
     try await Self.assertPackObjectMatchesGit(
       type: "tree",
-      sha: "ea9e62b9a09637b62470f0a8760d1f99a616aa6b"
+      sha: "6d067e8e3edc807aa2b8ae7a4c1ac858ae047fe6"
     )
   }
 
   @Test func readsLargeUndeltifiedBlobFromPackfile() async throws {
     try await Self.assertPackBlobMatchesGit(
-      "208e1f03013314fa2da02866da74d5ff0452a554"
+      "2bd5af0a91af49ea8665c468f74199e2009bf0e4"
     )
   }
 
   @Test func readsAnotherCommitFromPackfile() async throws {
     try await Self.assertPackObjectMatchesGit(
       type: "commit",
-      sha: "dbc7a7efcab0551800aff9f61daa88afd40047df"
+      sha: "585b8e26bee7b4228f06a8c94b0352463852c29d"
     )
   }
 
@@ -180,10 +180,17 @@ struct PackFormatAndBlobTests: ~Copyable {
 
   private static func loadSitPack() throws -> (pack: [UInt8], idx: [UInt8]) {
     let root = packageRoot()
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
+    let packDir = root.appendingPathComponent(".git/objects/pack", isDirectory: true)
+    let fm = FileManager.default
+    guard
+      let packName = try fm.contentsOfDirectory(atPath: packDir.path)
+        .first(where: { $0.hasSuffix(".pack") })?
+        .replacingOccurrences(of: ".pack", with: "")
+    else {
+      throw GitPackError.badPackSignature  // no pack found
+    }
+    let packURL = packDir.appendingPathComponent("\(packName).pack")
+    let idxURL = packDir.appendingPathComponent("\(packName).idx")
     let pack = try [UInt8](Data(contentsOf: packURL))
     let idx = try [UInt8](Data(contentsOf: idxURL))
     return (pack, idx)

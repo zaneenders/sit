@@ -135,8 +135,6 @@ enum GitSSHTransport {
     privateKey: NIOSSHPrivateKey, command: String, inputBytes: [UInt8]
   ) async throws -> [UInt8] {
     let group = MultiThreadedEventLoopGroup.singleton
-    let eventLoop = group.next()
-    let resultPromise = eventLoop.makePromise(of: [UInt8].self)
 
     let bootstrap = ClientBootstrap(group: group)
       .channelInitializer { channel in
@@ -158,25 +156,35 @@ enum GitSSHTransport {
 
     let channel = try await bootstrap.connect(host: host, port: port).get()
 
-    let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
+    // Submit all NIOSSHHandler work to the event loop to avoid
+    // crossing async boundaries with non-Sendable NIOSSHHandler.
+    let resultFuture: EventLoopFuture<[UInt8]> = try await channel.eventLoop.submit {
+      let sshHandler = try channel.pipeline.syncOperations.handler(
+        type: NIOSSHHandler.self)
+      let childPromise = channel.eventLoop.makePromise(of: Channel.self)
+      let resultPromise = channel.eventLoop.makePromise(of: [UInt8].self)
 
-    let childPromise = eventLoop.makePromise(of: Channel.self)
-    sshHandler.createChannel(childPromise) { childChannel, channelType in
-      guard channelType == .session else {
-        return childChannel.eventLoop.makeFailedFuture(GitSSHError.invalidChannelType)
+      sshHandler.createChannel(childPromise) { childChannel, channelType in
+        guard channelType == .session else {
+          return childChannel.eventLoop.makeFailedFuture(
+            GitSSHError.invalidChannelType)
+        }
+        return childChannel.eventLoop.makeCompletedFuture {
+          try childChannel.pipeline.syncOperations.addHandler(
+            GitCommandHandler(
+              command: command,
+              inputBytes: inputBytes,
+              resultPromise: resultPromise)
+          )
+        }
       }
-      return childChannel.eventLoop.makeCompletedFuture {
-        try childChannel.pipeline.syncOperations.addHandler(
-          GitCommandHandler(
-            command: command,
-            inputBytes: inputBytes,
-            resultPromise: resultPromise)
-        )
-      }
-    }
 
-    _ = try await childPromise.futureResult.get()
-    let bytes = try await resultPromise.futureResult.get()
+      return childPromise.futureResult.flatMap { _ in
+        resultPromise.futureResult
+      }
+    }.get()
+
+    let bytes = try await resultFuture.get()
     try? await channel.close().get()
     return bytes
   }
@@ -340,21 +348,24 @@ final class GitCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
   }
 
   func channelActive(context: ChannelHandlerContext) {
-    context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+    let channel = context.channel
+    let eventLoop = context.eventLoop
+
+    channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
       .flatMap { [command] _ in
-        context.triggerUserOutboundEvent(
+        channel.triggerUserOutboundEvent(
           SSHChannelRequestEvent.ExecRequest(command: command, wantReply: false))
       }
       .flatMap { [inputBytes] _ -> EventLoopFuture<Void> in
         guard !inputBytes.isEmpty else {
-          return context.eventLoop.makeSucceededVoidFuture()
+          return eventLoop.makeSucceededVoidFuture()
         }
-        let buf = context.channel.allocator.buffer(bytes: inputBytes)
+        let buf = channel.allocator.buffer(bytes: inputBytes)
         let data = SSHChannelData(type: .channel, data: .byteBuffer(buf))
-        return context.writeAndFlush(NIOAny(data))
+        return channel.writeAndFlush(data)
       }
       .flatMap { _ in
-        context.channel.close(mode: .output)
+        channel.close(mode: .output)
       }
       .whenFailure { [resultPromise] error in
         resultPromise.fail(error)

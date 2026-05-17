@@ -25,7 +25,7 @@ let package = Package(
         .product(name: "SystemPackage", package: "swift-system"),
       ],
       swiftSettings: [
-        .enableExperimentalFeature("Lifetimes"),
+        .treatAllWarnings(as: .error),
         .enableExperimentalFeature("InternalImportsByDefault"),
       ]),
     .executableTarget(
@@ -40,7 +40,7 @@ let package = Package(
       ],
       path: "Sources/sit-cli",
       swiftSettings: [
-        .enableExperimentalFeature("Lifetimes")
+        .treatAllWarnings(as: .error)
       ]),
     .testTarget(
       name: "SitTests",
@@ -51,7 +51,7 @@ let package = Package(
         .product(name: "SystemPackage", package: "swift-system"),
       ],
       swiftSettings: [
-        .enableExperimentalFeature("Lifetimes")
+        .treatAllWarnings(as: .error)
       ]),
   ]
 )

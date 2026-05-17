@@ -9,11 +9,11 @@ struct PackObjectReadingTests: ~Copyable {
   @Test func readsUndeltifiedBlobFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
-    let sha = Self.sha20("40755ccd19c2cd3f55d2e2e15a1d2f50eabe2f10")
+    let sha = Self.sha20("90983f8ae8fe9c65756a363085cda5013c2e4498")
     let got = try git.serializedObject(sha20: sha)
     let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
-      args: ["cat-file", "blob", "40755ccd19c2cd3f55d2e2e15a1d2f50eabe2f10"]
+      args: ["cat-file", "blob", "90983f8ae8fe9c65756a363085cda5013c2e4498"]
     )
     #expect(Array(got) == want)
   }
@@ -21,11 +21,11 @@ struct PackObjectReadingTests: ~Copyable {
   @Test func readsUndeltifiedCommitFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
-    let sha = Self.sha20("aed4b92c79f9142fdf2aeb920e7105302d14e9af")
+    let sha = Self.sha20("cb68a4e9d8bef20c2c1e57339b4eb9eb47f83afa")
     let got = try git.serializedObject(sha20: sha)
     let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
-      args: ["cat-file", "commit", "aed4b92c79f9142fdf2aeb920e7105302d14e9af"]
+      args: ["cat-file", "commit", "cb68a4e9d8bef20c2c1e57339b4eb9eb47f83afa"]
     )
     #expect(Array(got) == want)
   }
@@ -33,11 +33,11 @@ struct PackObjectReadingTests: ~Copyable {
   @Test func readsOfsDeltaBlobFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
-    let sha = Self.sha20("608b965d0fae32711d0c5a03de66c8c2ebc82f66")
+    let sha = Self.sha20("7c04d3e507ca0603378812cca832cdd3f2985699")
     let got = try git.serializedObject(sha20: sha)
     let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
-      args: ["cat-file", "blob", "608b965d0fae32711d0c5a03de66c8c2ebc82f66"]
+      args: ["cat-file", "blob", "7c04d3e507ca0603378812cca832cdd3f2985699"]
     )
     #expect(Array(got) == want)
   }
@@ -45,11 +45,11 @@ struct PackObjectReadingTests: ~Copyable {
   @Test func readsTreeFromPackfile() async throws {
     let (pack, idx) = try Self.loadSitPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
-    let sha = Self.sha20("1695d68b7d4da126abca17c308ef3729ecf5e6d3")
+    let sha = Self.sha20("b688726bf0de0d7460a249fc286d931cbb4764a8")
     let got = try git.serializedObject(sha20: sha)
     let want = try await Self.gitCatFile(
       packageRoot: Self.packageRoot(),
-      args: ["cat-file", "tree", "1695d68b7d4da126abca17c308ef3729ecf5e6d3"]
+      args: ["cat-file", "tree", "b688726bf0de0d7460a249fc286d931cbb4764a8"]
     )
     #expect(Array(got) == want)
   }
@@ -82,7 +82,7 @@ struct PackObjectReadingTests: ~Copyable {
       matched += 1
     }
     guard matched > 0 else {
-      Issue.record("skip: no rev-list --all objects from this repo appear in pack-58dfe777… idx")
+      Issue.record("skip: no rev-list --all objects from this repo appear in the pack idx")
       return
     }
   }
@@ -96,28 +96,27 @@ struct PackObjectReadingTests: ~Copyable {
 
   private static func loadSitPack() throws -> (pack: [UInt8], idx: [UInt8]) {
     let root = packageRoot()
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
+    let packDir = root.appendingPathComponent(".git/objects/pack", isDirectory: true)
+    let fm = FileManager.default
+    guard
+      let packName = try fm.contentsOfDirectory(atPath: packDir.path)
+        .first(where: { $0.hasSuffix(".pack") })?
+        .replacingOccurrences(of: ".pack", with: "")
+    else {
+      throw GitPackError.badPackSignature  // no pack found
+    }
+    let packURL = packDir.appendingPathComponent("\(packName).pack")
+    let idxURL = packDir.appendingPathComponent("\(packName).idx")
     let pack = try [UInt8](Data(contentsOf: packURL))
     let idx = try [UInt8](Data(contentsOf: idxURL))
     return (pack, idx)
   }
 
   private static func sha20(_ hex: String) -> [UInt8] {
-    var out: [UInt8] = []
-    out.reserveCapacity(20)
-    var i = hex.startIndex
-    while i < hex.endIndex {
-      let j = hex.index(i, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
-      let pair = hex[i..<j]
-      guard let b = UInt8(pair, radix: 16) else { fatalError("bad hex") }
-      out.append(b)
-      i = j
+    guard let b = GitDogfoodHelpers.sha20(fromHex40: hex) else {
+      preconditionFailure("bad test SHA \(hex)")
     }
-    precondition(out.count == 20)
-    return out
+    return b
   }
 
   private static func gitCatFile(packageRoot: URL, args: [String]) async throws -> [UInt8] {

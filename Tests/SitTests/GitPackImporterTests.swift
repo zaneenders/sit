@@ -67,7 +67,7 @@ struct GitPackImporterTests: ~Copyable {
         type: 3,  // blob
         payload: Array("hello".utf8)
       )
-      var result = try GitPackWriter.write(objects: [obj])
+      let result = try GitPackWriter.write(objects: [obj])
       var pack = result.packData
       // Flip last byte of SHA trailer
       pack[pack.count - 1] ^= 0xFF

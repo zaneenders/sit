@@ -312,16 +312,10 @@ struct CoverageEdgeTests: ~Copyable {
   // MARK: - GitPack.objectTypeAndPayload
 
   @Test func objectTypeAndPayloadReturnsType() async throws {
-    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
-    let pack = try [UInt8](Data(contentsOf: packURL))
-    let idx = try [UInt8](Data(contentsOf: idxURL))
+    let (pack, idx) = try Self.loadSitPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
-    // Known blob from the pack
-    let sha = GitDogfoodHelpers.sha20(fromHex40: "40755ccd19c2cd3f55d2e2e15a1d2f50eabe2f10")!
+    // Known undeltified blob from the pack
+    let sha = GitDogfoodHelpers.sha20(fromHex40: "90983f8ae8fe9c65756a363085cda5013c2e4498")!
     let (type, payload) = try gitPack.objectTypeAndPayload(sha20: sha)
     #expect(type == 3)  // blob
     #expect(!payload.isEmpty)
@@ -406,17 +400,31 @@ struct CoverageEdgeTests: ~Copyable {
   // MARK: - GitPack error path: shaNotFoundInIndex via objectTypeAndPayload
 
   @Test func objectTypeAndPayloadThrowsForUnknownSha() throws {
-    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
-    let pack = try [UInt8](Data(contentsOf: packURL))
-    let idx = try [UInt8](Data(contentsOf: idxURL))
+    let (pack, idx) = try Self.loadSitPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
     let missing = [UInt8](repeating: 0xab, count: 20)
     #expect(throws: GitPackError.shaNotFoundInIndex) {
       _ = try gitPack.objectTypeAndPayload(sha20: missing)
     }
+  }
+
+  // MARK: - Helpers
+
+  private static func loadSitPack() throws -> (pack: [UInt8], idx: [UInt8]) {
+    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
+    let packDir = root.appendingPathComponent(".git/objects/pack", isDirectory: true)
+    let fm = FileManager.default
+    guard
+      let packName = try fm.contentsOfDirectory(atPath: packDir.path)
+        .first(where: { $0.hasSuffix(".pack") })?
+        .replacingOccurrences(of: ".pack", with: "")
+    else {
+      throw GitPackError.badPackSignature  // no pack found
+    }
+    let packURL = packDir.appendingPathComponent("\(packName).pack")
+    let idxURL = packDir.appendingPathComponent("\(packName).idx")
+    let pack = try [UInt8](Data(contentsOf: packURL))
+    let idx = try [UInt8](Data(contentsOf: idxURL))
+    return (pack, idx)
   }
 }
