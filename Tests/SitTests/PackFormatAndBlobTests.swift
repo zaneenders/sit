@@ -275,7 +275,7 @@ struct PackFormatAndBlobTests: ~Copyable {
   /// Cached result of generating a git pack via `git repack`. Generated once;
   /// all delta-reading tests share the same pack to avoid concurrent subprocess
   /// spawning on Linux.
-  private struct GeneratedPack: @unchecked Sendable {
+  private struct GeneratedPack: Sendable {
     let pack: [UInt8]
     let idx: [UInt8]
     let repoRoot: URL
