@@ -15,4 +15,6 @@ public enum GitPackError: Error, Equatable, Sendable {
   case uncompressedSizeMismatch(expected: Int, actual: Int)
   case recursionDepthExceeded
   case pack64OffsetsNotSupported
+  case noObjectsToPack
+  case badObjectSHA
 }

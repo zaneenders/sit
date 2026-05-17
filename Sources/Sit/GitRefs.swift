@@ -1,6 +1,10 @@
 public import Foundation
 import SystemPackage
 
+#if canImport(System)
+import System
+#endif
+
 public enum GitRefs {
   /// Write `refs/<refName>` to `40-hex + LF` (e.g. `refs/heads/main`).
   public static func updateRef(gitDir: URL, refName: String, sha40HexLower: String) throws {

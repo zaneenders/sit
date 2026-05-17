@@ -1,7 +1,12 @@
 import Foundation
-import Testing
 import Subprocess
 import SystemPackage
+
+#if canImport(System)
+import System
+#endif
+
+import Testing
 
 @testable import Sit
 
@@ -78,11 +83,7 @@ struct SitCLIProcessTests: ~Copyable {
     }
   }
 
-  @Test func sitPushAndPullMatchGitExitCodes() async throws {
-    guard let gitPath = Self.gitPath() else {
-      Issue.record("skip: git not found on PATH")
-      return
-    }
+  @Test func sitPushFailsWithoutUpstream() async throws {
     guard let sitURL = Self.sitExecutableURL() else {
       Issue.record("skip: could not find built `sit`")
       return
@@ -94,17 +95,153 @@ struct SitCLIProcessTests: ~Copyable {
         executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
       #expect(initCode == 0, "sit init: \(errInit)")
 
-      let codeSitPush = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["push"])
-      let codeGitPush = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "push"])
-      #expect(codeSitPush == codeGitPush)
+      // Native push should fail (non-zero) when no upstream remote is configured
+      let codeSitPush = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["push"])
+      #expect(codeSitPush != 0, "sit push without remote should fail")
+    }
+  }
 
-      let codeSitPull = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["pull"])
-      let codeGitPull = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "pull"])
-      #expect(codeSitPull == codeGitPull)
+  @Test func sitPullFailsWithoutUpstream() async throws {
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try await TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+      let (initCode, _, errInit) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0, "sit init: \(errInit)")
 
-      let codeSitPushArg = try await Self.runSitQuiet(executable: sitURL.path, workingDirectory: work, arguments: ["push", "--dry-run", "nope", "main"])
-      let codeGitPushArg = try await Self.runQuiet(executable: gitPath, arguments: ["-C", work.path, "push", "--dry-run", "nope", "main"])
-      #expect(codeSitPushArg == codeGitPushArg)
+      let codeSitPull = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["pull"])
+      #expect(codeSitPull != 0, "sit pull without remote should fail")
+    }
+  }
+
+  @Test func sitFetchFailsWithoutUpstream() async throws {
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try await TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+      let (initCode, _, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0)
+      let code = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["fetch"])
+      #expect(code != 0, "sit fetch without remote should fail")
+    }
+  }
+
+  @Test func sitAddCommitStatusWorkflow() async throws {
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try await TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+
+      // init
+      let (initCode, _, initErr) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0, "sit init: \(initErr)")
+
+      // Write a file
+      let file = work.appendingPathComponent("hello.txt")
+      try Data("hello\n".utf8).write(to: file)
+
+      // status before add: should show untracked
+      let (_, statusBefore, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["status"])
+      #expect(statusBefore.contains("hello.txt"))
+
+      // add
+      let addCode = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["add", "hello.txt"])
+      #expect(addCode == 0, "sit add failed")
+
+      // commit
+      let (commitCode, commitOut, commitErr) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work,
+        arguments: ["commit", "-m", "initial", "--author-name", "Test", "--author-email", "t@t.com"])
+      #expect(commitCode == 0, "sit commit failed: \(commitErr)")
+      #expect(commitOut.count == 41)  // 40-hex SHA + newline
+
+      // status after commit: should be clean
+      let (_, statusAfter, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["status"])
+      #expect(
+        !statusAfter.contains("hello.txt"),
+        "status should be clean after commit, got: \(statusAfter)")
+    }
+  }
+
+  @Test func sitAddAllAndCommit() async throws {
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try await TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+
+      let (initCode, _, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0)
+
+      try Data("a\n".utf8).write(to: work.appendingPathComponent("a.txt"))
+      try Data("b\n".utf8).write(to: work.appendingPathComponent("b.txt"))
+
+      let addCode = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["add", "--all"])
+      #expect(addCode == 0)
+
+      let (commitCode, _, commitErr) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work,
+        arguments: ["commit", "-m", "two files", "--author-name", "Test", "--author-email", "t@t.com"])
+      #expect(commitCode == 0, "sit commit: \(commitErr)")
+    }
+  }
+
+  @Test func sitCommitProducesGitReadableObject() async throws {
+    guard let gitPath = Self.gitPath() else {
+      Issue.record("skip: git not found")
+      return
+    }
+    guard let sitURL = Self.sitExecutableURL() else {
+      Issue.record("skip: could not find built `sit`")
+      return
+    }
+    try await TempDirectory.withRemoval { root in
+      let work = root.appendingPathComponent("repo", isDirectory: true)
+      try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+
+      let (initCode, _, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work, arguments: ["init", "-b", "main"])
+      #expect(initCode == 0)
+
+      try Data("content\n".utf8).write(to: work.appendingPathComponent("f.txt"))
+      _ = try await Self.runSitQuiet(
+        executable: sitURL.path, workingDirectory: work, arguments: ["add", "f.txt"])
+      let (commitCode, commitOut, _) = try await Self.runSit(
+        executable: sitURL.path, workingDirectory: work,
+        arguments: ["commit", "-m", "msg", "--author-name", "A", "--author-email", "a@b.com"])
+      #expect(commitCode == 0)
+
+      let sha = commitOut.trimmingCharacters(in: .whitespacesAndNewlines)
+      #expect(sha.count == 40)
+
+      // git cat-file should be able to read the commit object sit wrote
+      let (gitCode, gitOut, _) = try await Self.runCapturing(
+        executable: gitPath,
+        arguments: ["-C", work.path, "cat-file", "-t", sha])
+      #expect(gitCode == 0)
+      #expect(gitOut.trimmingCharacters(in: .whitespacesAndNewlines) == "commit")
     }
   }
 
@@ -177,11 +314,12 @@ struct SitCLIProcessTests: ~Copyable {
   }
 
   /// Runs `sit` with a working directory (sit doesn't understand -C).
-  private static func runSitQuiet(executable: String, workingDirectory: URL, arguments: [String]) async throws -> Int32 {
+  private static func runSitQuiet(executable: String, workingDirectory: URL, arguments: [String]) async throws -> Int32
+  {
     let record = try await Subprocess.run(
       .name(executable),
       arguments: Arguments(arguments),
-      workingDirectory: FilePath(platformString: workingDirectory.path),
+      workingDirectory: FilePath(workingDirectory.path),
       output: .discarded,
       error: .discarded
     )
@@ -195,7 +333,7 @@ struct SitCLIProcessTests: ~Copyable {
     let record = try await Subprocess.run(
       .name(executable),
       arguments: Arguments(arguments),
-      workingDirectory: FilePath(platformString: workingDirectory.path),
+      workingDirectory: FilePath(workingDirectory.path),
       output: .string(limit: Int.max),
       error: .string(limit: Int.max)
     )

@@ -1,6 +1,6 @@
 public import Foundation
 
-/// `git status`-style summary using the index, `HEAD`’s tree (loose + pack), and the work tree.
+/// `git status`-style summary using the index, `HEAD`'s tree (loose + pack), and the work tree.
 public enum GitWorkdirStatusText: Sendable {
   private struct Classification: Sendable {
     var stagedMod: [String]
@@ -13,10 +13,19 @@ public enum GitWorkdirStatusText: Sendable {
 
   /// True when the work tree differs from the index (modified/deleted on disk) or paths exist that are not in the index (untracked).
   ///
-  /// Staged-only changes (index ≠ `HEAD` but disk matches index) return false, matching a common reading of `git status --porcelain`’s work-tree column plus `??` lines.
+  /// Staged-only changes (index ≠ `HEAD` but disk matches index) return false, matching a common reading of `git status --porcelain`'s work-tree column plus `??` lines.
   public static func hasUnstagedWorktreeChanges(gitDir: URL, workTree: URL) throws -> Bool {
     let c = try classify(gitDir: gitDir, workTree: workTree)
     return !c.unstagedMod.isEmpty || !c.unstagedDel.isEmpty || !c.untracked.isEmpty
+  }
+
+  /// True when there are any uncommitted changes: unstaged modifications/deletions,
+  /// staged (but uncommitted) changes vs HEAD, or untracked files.
+  /// Use this guard before operations that overwrite the work tree (checkout, merge, pull).
+  public static func hasUncommittedChanges(gitDir: URL, workTree: URL) throws -> Bool {
+    let c = try classify(gitDir: gitDir, workTree: workTree)
+    return !c.stagedMod.isEmpty || !c.stagedAdd.isEmpty || !c.stagedDel.isEmpty
+      || !c.unstagedMod.isEmpty || !c.unstagedDel.isEmpty || !c.untracked.isEmpty
   }
 
   public static func format(gitDir: URL, workTree: URL) throws -> String {

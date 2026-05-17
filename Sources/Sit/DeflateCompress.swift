@@ -264,7 +264,7 @@ public enum DeflateCompress: Sendable {
     isLast: Bool
   ) throws {
     w.writeBits(isLast ? 1 : 0, 1)  // BFINAL
-    w.writeBits(0, 2)                // BTYPE = 00
+    w.writeBits(0, 2)  // BTYPE = 00
     w.padToByteBoundary()
     let len = UInt16(truncatingIfNeeded: chunk.count)
     let nlen = ~len
@@ -534,7 +534,10 @@ private struct TreeEncoder {
         var run = 0
         while i + run < lengths.count, lengths[i + run] == 0, run < 138 { run += 1 }
         if run < 3 {
-          for _ in 0..<run { syms.append(0); extras.append(0) }
+          for _ in 0..<run {
+            syms.append(0)
+            extras.append(0)
+          }
         } else {
           // Use symbol 17 (3-10 zeros) or 18 (11-138 zeros)
           if run <= 10 {
@@ -597,7 +600,10 @@ private func writeDynamicHeader(
   // Find actual hclen (last non-zero code-length code length in clOrder)
   var actualHclen = 4
   for idx in stride(from: 18, through: 4, by: -1) {
-    if tree.bitLengths[clOrder[idx]] > 0 { actualHclen = idx + 1; break }
+    if tree.bitLengths[clOrder[idx]] > 0 {
+      actualHclen = idx + 1
+      break
+    }
   }
   w.writeBits(UInt32(actualHclen - 4), 4)
 
@@ -617,9 +623,13 @@ private func writeDynamicHeader(
       throw DeflateCompressError.internalState
     }
     w.writeHuffmanCode(code, bits)
-    if sym == 16 { w.writeBits(UInt32(clExtras[si]), 2) }
-    else if sym == 17 { w.writeBits(UInt32(clExtras[si]), 3) }
-    else if sym == 18 { w.writeBits(UInt32(clExtras[si]), 7) }
+    if sym == 16 {
+      w.writeBits(UInt32(clExtras[si]), 2)
+    } else if sym == 17 {
+      w.writeBits(UInt32(clExtras[si]), 3)
+    } else if sym == 18 {
+      w.writeBits(UInt32(clExtras[si]), 7)
+    }
     si += 1
   }
 }
@@ -673,14 +683,20 @@ private func compressDynamicInternal(_ plain: [UInt8]) throws -> [UInt8] {
   // Find max lit/len used
   var maxLit = 256
   for i in stride(from: 285, through: 257, by: -1) {
-    if litFreqs[i] > 0 { maxLit = i; break }
+    if litFreqs[i] > 0 {
+      maxLit = i
+      break
+    }
   }
   let litLenCount = maxLit + 1  // at least 257 per RFC 1951
   let litLenFreqs = Array(litFreqs.prefix(litLenCount))
 
   var maxDist = 0
   for i in stride(from: 29, through: 0, by: -1) {
-    if distFreqs[i] > 0 { maxDist = i; break }
+    if distFreqs[i] > 0 {
+      maxDist = i
+      break
+    }
   }
   let distCount = max(maxDist + 1, 1)
   let distFreqsTrimmed = Array(distFreqs.prefix(distCount))

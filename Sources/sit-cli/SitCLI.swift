@@ -3,12 +3,13 @@ import Foundation
 import Sit
 
 @main
-struct SitCommand: ParsableCommand {
+struct SitCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "sit",
     abstract: "Initialize a repo, stage files, show status, and create commits in a Git-compatible layout.",
     subcommands: [
-      SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self, SitPush.self, SitPull.self,
+      SitInit.self, SitAdd.self, SitCommit.self, SitStatus.self,
+      SitFetch.self, SitPush.self, SitPull.self,
     ]
   )
 }
@@ -63,7 +64,9 @@ struct SitAdd: ParsableCommand {
     abstract: "Stage file contents (writes blobs and updates the index)."
   )
 
-  @Flag(name: [.customShort("A"), .customLong("all")], help: "Stage the whole work tree (like git add --all); remove index entries for deleted files.")
+  @Flag(
+    name: [.customShort("A"), .customLong("all")],
+    help: "Stage the whole work tree (like git add --all); remove index entries for deleted files.")
   var all = false
 
   @Argument(help: "Files or directories to stage (omit when using --all / -A).")
@@ -189,7 +192,7 @@ struct SitCommit: ParsableCommand {
     let author: GitLocalConfig.UserIdentity
     let committer: GitLocalConfig.UserIdentity
     switch (authorName, authorEmail) {
-    case let (.some(n), .some(e)) where !n.isEmpty && !e.isEmpty:
+    case (.some(let n), .some(let e)) where !n.isEmpty && !e.isEmpty:
       author = GitLocalConfig.UserIdentity(name: n, email: e)
       committer = author
     case (nil, nil):
@@ -225,59 +228,87 @@ struct SitStatus: ParsableCommand {
   }
 }
 
-/// Run `git <subcommand>` with extra args; inherits stdin/stdout/stderr like running git directly.
-private enum SitGitPassthrough {
-  /// Maximum time (seconds) to wait for a `git` subprocess before killing it.
-  private static let timeoutSeconds: Int = 300
+struct SitFetch: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "fetch",
+    abstract: "Download objects and refs from a remote."
+  )
 
-  static func run(subcommand: String, gitArguments: [String]) throws {
+  @Argument(help: "Remote name (default: upstream remote for the current branch).")
+  var remote: String?
+
+  mutating func run() async throws {
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-    _ = try GitRepository.discover(from: cwd)
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    p.arguments = ["git", subcommand] + gitArguments
-    p.currentDirectoryURL = cwd
-    try p.run()
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
 
-    let timer = DispatchSource.makeTimerSource()
-    timer.schedule(deadline: .now() + .seconds(timeoutSeconds))
-    timer.setEventHandler {
-      p.terminate()
+    // Resolve remote
+    let remotes = try GitRemoteConfig.readRemotes(gitDir: gitDir)
+    let remoteName: String
+    if let r = remote {
+      remoteName = r
+    } else if let branchRef = try GitHEAD.currentBranchRef(gitDir: gitDir) {
+      let branch = branchRef.replacingOccurrences(of: "refs/heads/", with: "")
+      guard let bc = try GitRemoteConfig.readBranchConfig(gitDir: gitDir, branch: branch),
+        let r = bc.remoteName
+      else {
+        throw ValidationError("No upstream remote configured for branch '\(branch)'.")
+      }
+      remoteName = r
+    } else {
+      throw ValidationError("Detached HEAD — pass a remote name explicitly.")
     }
-    timer.resume()
 
-    p.waitUntilExit()
-    timer.cancel()
+    guard let remoteObj = remotes.first(where: { $0.name == remoteName }) else {
+      throw ValidationError("Remote '\(remoteName)' not found in .git/config.")
+    }
 
-    let status = p.terminationStatus
-    guard status == 0 else { throw ExitCode(status) }
+    let fetched = try await GitFetch.fetch(
+      gitDir: gitDir, workTree: workTree, remote: remoteObj)
+    print("From \(remoteObj.resolvedPushURL)")
+    for (ref, sha) in fetched.sorted(by: { $0.key < $1.key }) {
+      print("  \(String(sha.prefix(7)))  \(ref)")
+    }
   }
 }
 
-struct SitPush: ParsableCommand {
+struct SitPush: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "push",
-    abstract: "Run git push (Sit does not implement network transfer; use in normal clones)."
+    abstract: "Push the current branch to its upstream remote using native smart HTTP."
   )
 
-  @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git push.")
-  var gitArguments: [String] = []
+  @Argument(help: "Remote name (default: upstream remote for the current branch).")
+  var remote: String?
 
-  mutating func run() throws {
-    try SitGitPassthrough.run(subcommand: "push", gitArguments: gitArguments)
+  @Argument(help: "Refspecs to push (default: push the current branch to the matching remote ref).")
+  var refspecs: [String] = []
+
+  mutating func run() async throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
+    try await GitPush.push(
+      gitDir: gitDir,
+      workTree: workTree,
+      remoteName: remote,
+      refspecs: refspecs)
   }
 }
 
-struct SitPull: ParsableCommand {
+struct SitPull: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "pull",
-    abstract: "Run git pull (Sit does not implement network transfer; use in normal clones)."
+    abstract: "Fetch from and integrate with the upstream remote (native implementation)."
   )
 
-  @Argument(parsing: .captureForPassthrough, help: "Arguments passed through to git pull.")
-  var gitArguments: [String] = []
+  @Argument(help: "Remote name (default: upstream remote for the current branch).")
+  var remote: String?
 
-  mutating func run() throws {
-    try SitGitPassthrough.run(subcommand: "pull", gitArguments: gitArguments)
+  mutating func run() async throws {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let (gitDir, workTree) = try GitRepository.discover(from: cwd)
+    try await GitPull.pull(
+      gitDir: gitDir,
+      workTree: workTree,
+      remoteName: remote)
   }
 }

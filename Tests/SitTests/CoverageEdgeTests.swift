@@ -25,8 +25,10 @@ struct CoverageEdgeTests: ~Copyable {
 
   @Test func zlibHeaderRejectsTruncatedStreamAfterHeader() {
     let twoBytes: [UInt8] = [0x78, 0x9c]
-    #expect(throws: ZlibHeaderError.message(
-      "truncated stream: expected deflate block prefix after zlib header")) {
+    #expect(
+      throws: ZlibHeaderError.message(
+        "truncated stream: expected deflate block prefix after zlib header")
+    ) {
       _ = try ZlibHeader(parsingCompressedBytes: twoBytes)
     }
   }
@@ -36,8 +38,10 @@ struct CoverageEdgeTests: ~Copyable {
     var invalid: [UInt8] = [0x78, 0x9c, 0x00]
     // 0x77: CM=7, CINFO=7
     invalid[0] = 0x77
-    #expect(throws: ZlibHeaderError.message(
-      "Invalid zlib CM: RFC 1950 requires CM=8 (deflate), got 77 (CM=7)")) {
+    #expect(
+      throws: ZlibHeaderError.message(
+        "Invalid zlib CM: RFC 1950 requires CM=8 (deflate), got 77 (CM=7)")
+    ) {
       _ = try ZlibHeader(parsingCompressedBytes: invalid)
     }
   }
@@ -71,7 +75,7 @@ struct CoverageEdgeTests: ~Copyable {
   @Test func zlibHeaderRejectsFDICT() throws {
     // FDICT is bit 5 (0x20) of FLG. Need valid CM/CINFO/FCHECK otherwise.
     // 0x78 (CM=8, CINFO=7). 0x78*256=30720. 30720%31=30. Need flg%31=1 and FDICT=1.
-    // flg = 0x20 | 1 = 0x21 = 33. 33%31=2 ≠ 1. 
+    // flg = 0x20 | 1 = 0x21 = 33. 33%31=2 ≠ 1.
     // Try flg = 0x20 | 0x20 = 0x40? No. Let's find flg where flg%31==1 and bit5 set.
     // 31*N + 1 with bit 5 set: N=1→32 (bit5 set) → flg=32=0x20. 0x20%31=1 ✓. FDICT=1.
     let bytes: [UInt8] = [0x78, 0x20, 0x00]
@@ -307,17 +311,13 @@ struct CoverageEdgeTests: ~Copyable {
 
   // MARK: - GitPack.objectTypeAndPayload
 
-  @Test func objectTypeAndPayloadReturnsType() async throws {
-    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
-    let pack = try [UInt8](Data(contentsOf: packURL))
-    let idx = try [UInt8](Data(contentsOf: idxURL))
+  @Test func objectTypeAndPayloadReturnsType() throws {
+    let (pack, idx) = try Self.syntheticPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
-    // Known blob from the pack
-    let sha = GitDogfoodHelpers.sha20(fromHex40: "40755ccd19c2cd3f55d2e2e15a1d2f50eabe2f10")!
+    // The synthetic pack contains a single blob "hello\n"
+    let blobContent: [UInt8] = [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]
+    let body: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let sha = GitSHA1.digest(of: body)
     let (type, payload) = try gitPack.objectTypeAndPayload(sha20: sha)
     #expect(type == 3)  // blob
     #expect(!payload.isEmpty)
@@ -402,17 +402,22 @@ struct CoverageEdgeTests: ~Copyable {
   // MARK: - GitPack error path: shaNotFoundInIndex via objectTypeAndPayload
 
   @Test func objectTypeAndPayloadThrowsForUnknownSha() throws {
-    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
-    let pack = try [UInt8](Data(contentsOf: packURL))
-    let idx = try [UInt8](Data(contentsOf: idxURL))
+    let (pack, idx) = try Self.syntheticPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
     let missing = [UInt8](repeating: 0xab, count: 20)
     #expect(throws: GitPackError.shaNotFoundInIndex) {
       _ = try gitPack.objectTypeAndPayload(sha20: missing)
     }
+  }
+
+  // MARK: - Helpers
+
+  private static func syntheticPack() throws -> (pack: [UInt8], idx: [UInt8]) {
+    let blobContent: [UInt8] = [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]  // "hello\n"
+    let body: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let sha20 = GitSHA1.digest(of: body)
+    let obj = GitPackWriter.PackObject(sha20: sha20, type: 3, payload: blobContent)
+    let result = try GitPackWriter.write(objects: [obj])
+    return (result.packData, result.indexData)
   }
 }

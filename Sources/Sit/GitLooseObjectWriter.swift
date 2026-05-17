@@ -76,7 +76,17 @@ public enum GitLooseObjectWriter {
     ["100644", "100755", "120000", "040000"].contains(m)
   }
 
-  private static func writeObject(gitDir: URL, type: String, body: [UInt8]) throws -> [UInt8] {
+  /// Format timezone offset as `+HHMM` / `-HHMM` for the given date.
+  public static func gitTimezoneOffset(for date: Date) -> String {
+    let sec = TimeZone.current.secondsFromGMT(for: date)
+    let sign = sec >= 0 ? "+" : "-"
+    let a = abs(sec)
+    let hh = a / 3600
+    let mm = (a % 3600) / 60
+    return String(format: "%@%02d%02d", sign, hh, mm)
+  }
+
+  public static func writeObject(gitDir: URL, type: String, body: [UInt8]) throws -> [UInt8] {
     var header: [UInt8] = []
     header.append(contentsOf: type.utf8)
     header.append(UInt8(ascii: " "))

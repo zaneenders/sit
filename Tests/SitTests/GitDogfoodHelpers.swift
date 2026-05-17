@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import Subprocess
+import Testing
 
 /// Shared `git` / `python3` helpers for dogfood tests across suites.
 enum GitDogfoodHelpers {
@@ -88,11 +88,13 @@ enum GitDogfoodHelpers {
   static func gitCatFileBatchRaw(packageRoot: URL, shas: [String]) async -> [(sha: String, type: String, raw: Data)]? {
     guard let git = gitExecutable(), !shas.isEmpty else { return nil }
     let input = Data(shas.joined(separator: "\n").utf8 + [0x0a])
-    guard let all = await runGitData(
-      git: git,
-      arguments: ["-C", packageRoot.path, "cat-file", "--batch"],
-      stdinData: input
-    ) else { return nil }
+    guard
+      let all = await runGitData(
+        git: git,
+        arguments: ["-C", packageRoot.path, "cat-file", "--batch"],
+        stdinData: input
+      )
+    else { return nil }
 
     var results: [(String, String, Data)] = []
     results.reserveCapacity(shas.count)

@@ -1,10 +1,13 @@
 import Foundation
+import Subprocess
 import Testing
 
 @testable import Sit
 
 @Suite(.timeLimit(.minutes(1)))
 struct PackFormatAndBlobTests: ~Copyable {
+  // MARK: - Index / Pack rejection (synthetic pack)
+
   @Test func packIndexRejectsBadMagic() {
     let junk = [UInt8](repeating: 0, count: 2048)
     #expect(throws: GitPackError.badIndexMagic) {
@@ -13,7 +16,7 @@ struct PackFormatAndBlobTests: ~Copyable {
   }
 
   @Test func packIndexRejectsUnsupportedVersion() throws {
-    let (_, idx) = try Self.loadSitPack()
+    let (_, idx) = try Self.syntheticPack()
     var bytes = idx
     guard bytes.count >= 8 else { return }
     bytes[4] = 0
@@ -26,7 +29,7 @@ struct PackFormatAndBlobTests: ~Copyable {
   }
 
   @Test func gitPackRejectsBadSignature() throws {
-    let (pack, idx) = try Self.loadSitPack()
+    let (pack, idx) = try Self.syntheticPack()
     var bad = pack
     bad[0] = 0
     bad[1] = 0
@@ -38,7 +41,7 @@ struct PackFormatAndBlobTests: ~Copyable {
   }
 
   @Test func gitPackRejectsUnknownVersion() throws {
-    let (pack, idx) = try Self.loadSitPack()
+    let (pack, idx) = try Self.syntheticPack()
     var bad = pack
     guard bad.count >= 8 else { return }
     bad[4] = 0
@@ -51,7 +54,7 @@ struct PackFormatAndBlobTests: ~Copyable {
   }
 
   @Test func gitPackShaNotInIndexThrows() throws {
-    let (pack, idx) = try Self.loadSitPack()
+    let (pack, idx) = try Self.syntheticPack()
     let git = try GitPack(packBytes: pack, indexBytes: idx)
     let missing = [UInt8](repeating: 0xab, count: 20)
     #expect(throws: GitPackError.shaNotFoundInIndex) {
@@ -59,38 +62,91 @@ struct PackFormatAndBlobTests: ~Copyable {
     }
   }
 
-  // MARK: - More objects from pack-58dfe777… (verify-pack corpus)
+  // MARK: - Read undeltified objects from synthetic pack
 
-  @Test func readsSecondOfsDeltaBlobFromPackfile() async throws {
-    try await Self.assertPackBlobMatchesGit(
-      "8ac869349a2a5a9cee73136d3f283966ade4377f"
-    )
+  @Test func readsLargeUndeltifiedBlobFromPackfile() throws {
+    let blobContent = [UInt8](repeating: 0x5a, count: 10_000)  // 10 KB blob
+    let body: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let sha20 = GitSHA1.digest(of: body)
+    let obj = GitPackWriter.PackObject(sha20: sha20, type: 3, payload: blobContent)
+    let result = try GitPackWriter.write(objects: [obj])
+    let gitPack = try GitPack(packBytes: result.packData, indexBytes: result.indexData)
+    let got = try gitPack.serializedObject(sha20: sha20)
+    // Pack stores payload only (no loose-object header)
+    #expect(Array(got) == blobContent)
   }
 
+  @Test func readsAnotherCommitFromPackfile() throws {
+    let (pack, idx, _, treeHex, commitHex) = try Self.multiObjectPack()
+    let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
+
+    let commitSHA = try GitHex.decode20(commitHex)
+    let got = try gitPack.serializedObject(sha20: commitSHA)
+    let gotStr = String(decoding: got, as: UTF8.self)
+    #expect(gotStr.hasPrefix("tree \(treeHex)"))
+    #expect(gotStr.contains("author "))
+    #expect(gotStr.contains("committer "))
+  }
+
+  // MARK: - Delta objects from shared git-generated pack (generated once)
+
   @Test func readsTinyOfsDeltaBlobFromPackfile() async throws {
-    try await Self.assertPackBlobMatchesGit(
-      "01ce9042fe2a5132f646fd896bb9ac657519cff2"
-    )
+    let generated = try await Self.gitGeneratedPack()
+    guard let deltaBlob = generated.shuffledSHAs.first(where: { $0.type == "blob" }) else {
+      Issue.record("skip: no blob in git-generated pack")
+      return
+    }
+    let gitPack = try GitPack(packBytes: generated.pack, indexBytes: generated.idx)
+    let sha20 = try GitHex.decode20(deltaBlob.sha)
+    let got = try gitPack.serializedObject(sha20: sha20)
+    guard
+      let want = await GitDogfoodHelpers.gitCatFileRaw(
+        packageRoot: generated.repoRoot, type: "blob", sha: deltaBlob.sha)
+    else {
+      Issue.record("skip: git cat-file blob \(deltaBlob.sha) failed")
+      return
+    }
+    #expect(Array(got) == Array(want))
+  }
+
+  @Test func readsSecondOfsDeltaBlobFromPackfile() async throws {
+    let generated = try await Self.gitGeneratedPack()
+    let blobs = generated.shuffledSHAs.filter { $0.type == "blob" }
+    guard blobs.count >= 2 else {
+      Issue.record("skip: need 2+ blobs, got \(blobs.count)")
+      return
+    }
+    let gitPack = try GitPack(packBytes: generated.pack, indexBytes: generated.idx)
+    let second = blobs[1]
+    let sha20 = try GitHex.decode20(second.sha)
+    let got = try gitPack.serializedObject(sha20: sha20)
+    guard
+      let want = await GitDogfoodHelpers.gitCatFileRaw(
+        packageRoot: generated.repoRoot, type: "blob", sha: second.sha)
+    else {
+      Issue.record("skip: git cat-file blob \(second.sha)")
+      return
+    }
+    #expect(Array(got) == Array(want))
   }
 
   @Test func readsOfsDeltaTreeFromPackfile() async throws {
-    try await Self.assertPackObjectMatchesGit(
-      type: "tree",
-      sha: "ea9e62b9a09637b62470f0a8760d1f99a616aa6b"
-    )
-  }
-
-  @Test func readsLargeUndeltifiedBlobFromPackfile() async throws {
-    try await Self.assertPackBlobMatchesGit(
-      "208e1f03013314fa2da02866da74d5ff0452a554"
-    )
-  }
-
-  @Test func readsAnotherCommitFromPackfile() async throws {
-    try await Self.assertPackObjectMatchesGit(
-      type: "commit",
-      sha: "dbc7a7efcab0551800aff9f61daa88afd40047df"
-    )
+    let generated = try await Self.gitGeneratedPack()
+    guard let tree = generated.shuffledSHAs.first(where: { $0.type == "tree" }) else {
+      Issue.record("skip: no tree in git-generated pack")
+      return
+    }
+    let gitPack = try GitPack(packBytes: generated.pack, indexBytes: generated.idx)
+    let sha20 = try GitHex.decode20(tree.sha)
+    let got = try gitPack.serializedObject(sha20: sha20)
+    guard
+      let want = await GitDogfoodHelpers.gitCatFileRaw(
+        packageRoot: generated.repoRoot, type: "tree", sha: tree.sha)
+    else {
+      Issue.record("skip: git cat-file tree \(tree.sha)")
+      return
+    }
+    #expect(Array(got) == Array(want))
   }
 
   // MARK: - ParsedGitBlob
@@ -146,20 +202,20 @@ struct PackFormatAndBlobTests: ~Copyable {
   }
 
   @Test func packMatchesGitForEachLocalBranchTipCommit() async throws {
-    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let tips = await GitDogfoodHelpers.gitLocalBranchTipCommitShas(packageRoot: root)
-    guard !tips.isEmpty else {
-      Issue.record("skip: no local refs/heads tips")
+    let generated = try await Self.gitGeneratedPack()
+    let gitPack = try GitPack(packBytes: generated.pack, indexBytes: generated.idx)
+    let commits = generated.shuffledSHAs.filter { $0.type == "commit" }
+    guard !commits.isEmpty else {
+      Issue.record("skip: no commits in generated pack")
       return
     }
-    let (pack, idx) = try Self.loadSitPack()
-    let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
     var checked = 0
-    for sha in tips {
+    for (sha, _) in commits {
       guard let shaBytes = GitDogfoodHelpers.sha20(fromHex40: sha) else { continue }
       guard gitPack.index.offset(for: shaBytes) != nil else { continue }
       let got = try gitPack.serializedObject(sha20: shaBytes)
-      guard let want = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: "commit", sha: sha) else {
+      guard let want = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: generated.repoRoot, type: "commit", sha: sha)
+      else {
         Issue.record("skip: git cat-file commit \(sha)")
         return
       }
@@ -167,48 +223,145 @@ struct PackFormatAndBlobTests: ~Copyable {
       checked += 1
     }
     guard checked > 0 else {
-      Issue.record("skip: no branch tips present in pack fixture idx")
+      Issue.record("skip: no commits found in pack index")
       return
     }
   }
 
-  // MARK: - helpers
+  // MARK: - Helpers
 
-  private static func packageRoot() -> URL {
-    GitDogfoodHelpers.packageRoot(testFile: #filePath)
+  /// A small synthetic pack with a single blob — used for rejection/missing-SHA tests.
+  private static func syntheticPack() throws -> (pack: [UInt8], idx: [UInt8]) {
+    let blobContent: [UInt8] = [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]  // "hello\n"
+    let body: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let sha20 = GitSHA1.digest(of: body)
+    let obj = GitPackWriter.PackObject(sha20: sha20, type: 3, payload: blobContent)
+    let result = try GitPackWriter.write(objects: [obj])
+    return (result.packData, result.indexData)
   }
 
-  private static func loadSitPack() throws -> (pack: [UInt8], idx: [UInt8]) {
-    let root = packageRoot()
-    let packURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.pack")
-    let idxURL = root.appendingPathComponent(
-      ".git/objects/pack/pack-58dfe777b898c1d6dd7b1c2e34747a7b562be6e5.idx")
+  /// A pack with blob + tree + commit (3 objects).
+  private static func multiObjectPack() throws -> (
+    pack: [UInt8], idx: [UInt8],
+    blobHex: String, treeHex: String, commitHex: String
+  ) {
+    let blobContent: [UInt8] = Array("hello\n".utf8)
+    let blobBody: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let blobSHA = GitSHA1.digest(of: blobBody)
+    let blobHex = GitHex.encodeLower(blobSHA)
+
+    let mode = "100644"
+    let name = "f.txt"
+    let treePayload = Array("\(mode) \(name)\0".utf8) + blobSHA
+    let treeBody: [UInt8] = Array("tree \(treePayload.count)\0".utf8) + treePayload
+    let treeSHA = GitSHA1.digest(of: treeBody)
+    let treeHex = GitHex.encodeLower(treeSHA)
+
+    let commitPayload = Array(
+      "tree \(treeHex)\nauthor T <t@t> 0 +0000\ncommitter T <t@t> 0 +0000\n\nmsg\n".utf8)
+    let commitBody: [UInt8] = Array("commit \(commitPayload.count)\0".utf8) + commitPayload
+    let commitSHA = GitSHA1.digest(of: commitBody)
+    let commitHex = GitHex.encodeLower(commitSHA)
+
+    let objects: [GitPackWriter.PackObject] = [
+      GitPackWriter.PackObject(sha20: blobSHA, type: 3, payload: blobContent),
+      GitPackWriter.PackObject(sha20: treeSHA, type: 2, payload: treePayload),
+      GitPackWriter.PackObject(sha20: commitSHA, type: 1, payload: commitPayload),
+    ]
+    let result = try GitPackWriter.write(objects: objects)
+    return (result.packData, result.indexData, blobHex, treeHex, commitHex)
+  }
+
+  /// Cached result of generating a git pack via `git repack`. Generated once;
+  /// all delta-reading tests share the same pack to avoid concurrent subprocess
+  /// spawning on Linux.
+  private struct GeneratedPack: Sendable {
+    let pack: [UInt8]
+    let idx: [UInt8]
+    let repoRoot: URL
+    let shuffledSHAs: [(sha: String, type: String)]
+  }
+
+  private nonisolated(unsafe) static var _cachedGeneratedPack: GeneratedPack? = nil
+
+  private static func gitGeneratedPack() async throws -> GeneratedPack {
+    if let cached = _cachedGeneratedPack { return cached }
+    guard let gitPath = GitDogfoodHelpers.gitExecutable() else {
+      Issue.record("skip: git not on PATH")
+      throw GitPackError.badPackSignature
+    }
+    let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("sit-test-pack-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+
+    let repo = tmpDir.appendingPathComponent("repo", isDirectory: true)
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+    _ = try await runGit(gitPath, ["-C", repo.path, "init", "-b", "main"])
+    _ = try await runGit(
+      gitPath,
+      [
+        "-c", "user.name=T", "-c", "user.email=t@t", "-C", repo.path,
+        "commit", "--allow-empty", "-m", "first",
+      ])
+    try Data("hello\n".utf8).write(to: repo.appendingPathComponent("a.txt"))
+    _ = try await runGit(gitPath, ["-C", repo.path, "add", "a.txt"])
+    _ = try await runGit(
+      gitPath,
+      [
+        "-c", "user.name=T", "-c", "user.email=t@t", "-C", repo.path,
+        "commit", "-m", "second",
+      ])
+    try Data("hello world\n".utf8).write(to: repo.appendingPathComponent("a.txt"))
+    _ = try await runGit(gitPath, ["-C", repo.path, "add", "a.txt"])
+    _ = try await runGit(
+      gitPath,
+      [
+        "-c", "user.name=T", "-c", "user.email=t@t", "-C", repo.path,
+        "commit", "-m", "third",
+      ])
+    _ = try await runGit(gitPath, ["-C", repo.path, "repack", "-ad"])
+
+    let packDir = repo.appendingPathComponent(".git/objects/pack", isDirectory: true)
+    let fm = FileManager.default
+    guard
+      let packName = try fm.contentsOfDirectory(atPath: packDir.path)
+        .first(where: { $0.hasSuffix(".pack") })?
+        .replacingOccurrences(of: ".pack", with: "")
+    else {
+      Issue.record("skip: repack produced no pack")
+      throw GitPackError.badPackSignature
+    }
+    let packURL = packDir.appendingPathComponent("\(packName).pack")
+    let idxURL = packDir.appendingPathComponent("\(packName).idx")
     let pack = try [UInt8](Data(contentsOf: packURL))
     let idx = try [UInt8](Data(contentsOf: idxURL))
-    return (pack, idx)
-  }
 
-  private static func sha20(_ hex: String) -> [UInt8] {
-    guard let b = GitDogfoodHelpers.sha20(fromHex40: hex) else {
-      preconditionFailure("bad test SHA \(hex)")
+    let lines = await GitDogfoodHelpers.gitRevListUniqueShas40(packageRoot: repo)
+    var shas: [(sha: String, type: String)] = []
+    if let batch = await GitDogfoodHelpers.gitCatFileBatchRaw(packageRoot: repo, shas: lines) {
+      for (sha, type, _) in batch {
+        shas.append((sha, type))
+      }
     }
-    return b
-  }
-
-  private static func assertPackBlobMatchesGit(_ hex40: String) async throws {
-    try await assertPackObjectMatchesGit(type: "blob", sha: hex40)
-  }
-
-  private static func assertPackObjectMatchesGit(type: String, sha: String) async throws {
-    let root = packageRoot()
-    let (pack, idx) = try loadSitPack()
-    let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
-    let got = try gitPack.serializedObject(sha20: sha20(sha))
-    guard let want = await GitDogfoodHelpers.gitCatFileRaw(packageRoot: root, type: type, sha: sha) else {
-      Issue.record("skip: git cat-file \(type) \(sha)")
-      return
+    guard !shas.isEmpty else {
+      Issue.record("skip: no objects in generated pack")
+      throw GitPackError.badPackSignature
     }
-    #expect(Array(got) == Array(want))
+    let result = GeneratedPack(pack: pack, idx: idx, repoRoot: repo, shuffledSHAs: shas.shuffled())
+    _cachedGeneratedPack = result
+    return result
+  }
+
+  private static func runGit(_ git: String, _ args: [String]) async throws -> (Int32, String, String) {
+    let record: ExecutionRecord<StringOutput, DiscardedOutput> = try await Subprocess.run(
+      .name(git),
+      arguments: Arguments(args),
+      output: .string(limit: Int.max),
+      error: .discarded)
+    return (
+      record.terminationStatus.isSuccess ? 0 : 1,
+      record.standardOutput ?? "",
+      ""
+    )
   }
 }

@@ -1,5 +1,5 @@
-import RegexBuilder
 public import Foundation
+import RegexBuilder
 
 /// Loads `.git/info/exclude` and all `.gitignore` files under the work tree (skipping `.git/`) and answers ignore queries with Git-style **last matching rule wins** semantics.
 ///

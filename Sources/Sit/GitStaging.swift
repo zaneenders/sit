@@ -1,6 +1,10 @@
 public import Foundation
 import SystemPackage
 
+#if canImport(System)
+import System
+#endif
+
 public enum GitStaging: Sendable {
   /// Create a commit from the current `.git/index`, update `HEAD`'s branch ref (or detached `HEAD`), return commit id hex.
   /// `authorDate` and `committerDate` allow the two timestamps to differ (as real Git does);
@@ -26,12 +30,12 @@ public enum GitStaging: Sendable {
     let treeHex = GitHex.encodeLower(treeSha)
     let parent = try GitHEAD.resolveCommitHex(gitDir: gitDir)
     let parents = parent.map { [$0] } ?? []
-    let authorTz = Self.gitTimezoneOffset(for: authorDate)
+    let authorTz = GitLooseObjectWriter.gitTimezoneOffset(for: authorDate)
     let authorTs = Int64(authorDate.timeIntervalSince1970)
     let authorLine = "\(author.name) <\(author.email)> \(authorTs) \(authorTz)"
     let committerPerson = committer ?? author
     let cDate = committerDate ?? authorDate
-    let committerTz = Self.gitTimezoneOffset(for: cDate)
+    let committerTz = GitLooseObjectWriter.gitTimezoneOffset(for: cDate)
     let committerTs = Int64(cDate.timeIntervalSince1970)
     let committerLine = "\(committerPerson.name) <\(committerPerson.email)> \(committerTs) \(committerTz)"
     let commitSha = try GitLooseObjectWriter.writeCommit(
@@ -52,14 +56,5 @@ public enum GitStaging: Sendable {
       try GitAtomicWrite.write(content, to: FilePath(headURL.path))
     }
     return commitHex
-  }
-
-  private static func gitTimezoneOffset(for date: Date) -> String {
-    let sec = TimeZone.current.secondsFromGMT(for: date)
-    let sign = sec >= 0 ? "+" : "-"
-    let a = abs(sec)
-    let hh = a / 3600
-    let mm = (a % 3600) / 60
-    return String(format: "%@%02d%02d", sign, hh, mm)
   }
 }
