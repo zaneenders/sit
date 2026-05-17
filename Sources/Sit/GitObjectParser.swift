@@ -97,10 +97,10 @@ public enum GitObjectParser: Sendable {
   public static func typeInt(from typeString: String) -> Int {
     switch typeString {
     case "commit": return 1
-    case "tree":   return 2
-    case "blob":   return 3
-    case "tag":    return 4
-    default:       return 3  // safest fallback
+    case "tree": return 2
+    case "blob": return 3
+    case "tag": return 4
+    default: return 3  // safest fallback
     }
   }
 }

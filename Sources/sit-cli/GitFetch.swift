@@ -1,14 +1,6 @@
 import Foundation
 import Sit
 
-import Foundation
-import Sit
-
-import Foundation
-import Sit
-
-// MARK: - Git Fetch
-
 enum GitFetch {
 
   enum Error: Swift.Error, Equatable {
@@ -215,4 +207,3 @@ enum GitFetch {
   }
 
 }
-

@@ -471,4 +471,3 @@ enum GitPull {
 
   // MARK: - Helpers
 }
-

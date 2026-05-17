@@ -208,4 +208,3 @@ enum GitPackImporter {
     return try GitLooseObjectWriter.writeObject(gitDir: gitDir, type: type, body: body)
   }
 }
-

@@ -1,7 +1,7 @@
 import Foundation
-import Testing
 import Subprocess
 import System
+import Testing
 
 @testable import Sit
 @testable import sit_cli
@@ -65,19 +65,30 @@ struct GitFetchIntegrationTests: ~Copyable {
 
       let (initCode, _, initErr) = try await Self.runGit(
         git, ["-C", serverDir.path, "init", "-b", "main"])
-      guard initCode == 0 else { Issue.record("git init: \(initErr)"); return }
+      guard initCode == 0 else {
+        Issue.record("git init: \(initErr)")
+        return
+      }
 
       try Data("hello\n".utf8).write(to: serverDir.appendingPathComponent("f.txt"))
       _ = try await Self.runGit(git, ["-C", serverDir.path, "add", "f.txt"])
-      let (commitCode, _, commitErr) = try await Self.runGit(git, [
-        "-c", "user.name=T", "-c", "user.email=t@t.com",
-        "-C", serverDir.path, "commit", "-m", "first",
-      ])
-      guard commitCode == 0 else { Issue.record("git commit: \(commitErr)"); return }
+      let (commitCode, _, commitErr) = try await Self.runGit(
+        git,
+        [
+          "-c", "user.name=T", "-c", "user.email=t@t.com",
+          "-C", serverDir.path, "commit", "-m", "first",
+        ])
+      guard commitCode == 0 else {
+        Issue.record("git commit: \(commitErr)")
+        return
+      }
 
       let (_, headOut, _) = try await Self.runGit(git, ["-C", serverDir.path, "rev-parse", "HEAD"])
       let expectedHex = headOut.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard expectedHex.count == 40 else { Issue.record("bad SHA"); return }
+      guard expectedHex.count == 40 else {
+        Issue.record("bad SHA")
+        return
+      }
 
       // 2. Client: empty sit repo
       let clientDir = root.appendingPathComponent("client")
@@ -89,7 +100,10 @@ struct GitFetchIntegrationTests: ~Copyable {
       // 3. Advertise + fetch via local transport
       let advert = try await GitLocalTransport.advertiseFetchRefs(path: serverDir.path)
       let wantRef = advert.refs.first(where: { $0.name == "refs/heads/main" })
-      guard let wantRef else { Issue.record("refs/heads/main not in advertisement"); return }
+      guard let wantRef else {
+        Issue.record("refs/heads/main not in advertisement")
+        return
+      }
       let wantHex = GitHex.encodeLower(wantRef.sha20)
       #expect(wantHex == expectedHex)
 
@@ -126,23 +140,33 @@ struct GitFetchIntegrationTests: ~Copyable {
       let serverDir = root.appendingPathComponent("server")
       try FileManager.default.createDirectory(at: serverDir, withIntermediateDirectories: true)
       _ = try await Self.runGit(git, ["-C", serverDir.path, "init", "-b", "main"])
-      _ = try await Self.runGit(git, [
-        "-c", "user.name=T", "-c", "user.email=t@t.com",
-        "-C", serverDir.path, "commit", "--allow-empty", "-m", "first",
-      ])
+      _ = try await Self.runGit(
+        git,
+        [
+          "-c", "user.name=T", "-c", "user.email=t@t.com",
+          "-C", serverDir.path, "commit", "--allow-empty", "-m", "first",
+        ])
       let (_, firstOut, _) = try await Self.runGit(
         git, ["-C", serverDir.path, "rev-parse", "HEAD"])
       let firstHex = firstOut.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard firstHex.count == 40 else { Issue.record("bad first SHA"); return }
+      guard firstHex.count == 40 else {
+        Issue.record("bad first SHA")
+        return
+      }
 
-      _ = try await Self.runGit(git, [
-        "-c", "user.name=T", "-c", "user.email=t@t.com",
-        "-C", serverDir.path, "commit", "--allow-empty", "-m", "second",
-      ])
+      _ = try await Self.runGit(
+        git,
+        [
+          "-c", "user.name=T", "-c", "user.email=t@t.com",
+          "-C", serverDir.path, "commit", "--allow-empty", "-m", "second",
+        ])
       let (_, secondOut, _) = try await Self.runGit(
         git, ["-C", serverDir.path, "rev-parse", "HEAD"])
       let secondHex = secondOut.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard secondHex.count == 40 else { Issue.record("bad second SHA"); return }
+      guard secondHex.count == 40 else {
+        Issue.record("bad second SHA")
+        return
+      }
       #expect(firstHex != secondHex)
 
       // 2. Client: sit repo seeded with both commit objects by fetching the tip.
@@ -158,7 +182,10 @@ struct GitFetchIntegrationTests: ~Copyable {
       let advert1 = try await GitLocalTransport.advertiseFetchRefs(path: serverDir.path)
       let pack1 = try await GitLocalTransport.fetch(
         path: serverDir.path, wantHashes: [secondHex], capabilities: advert1.capabilities)
-      guard !pack1.isEmpty else { Issue.record("initial fetch returned empty pack"); return }
+      guard !pack1.isEmpty else {
+        Issue.record("initial fetch returned empty pack")
+        return
+      }
       let packs = try GitObjectDatabase.openAllPacks(gitDir: clientGitDir)
       let importResult = try GitPackImporter.importPack(
         gitDir: clientGitDir, packData: pack1, packs: packs)
@@ -261,7 +288,8 @@ struct GitFetchIntegrationTests: ~Copyable {
     return (
       record.terminationStatus.isSuccess ? 0 : 1,
       record.standardOutput ?? "",
-      record.standardError ?? "")
+      record.standardError ?? ""
+    )
   }
 
   private static func runCapturing(_ exe: String, _ args: [String]) async throws -> (
@@ -275,6 +303,7 @@ struct GitFetchIntegrationTests: ~Copyable {
     return (
       record.terminationStatus.isSuccess ? 0 : 1,
       record.standardOutput ?? "",
-      record.standardError ?? "")
+      record.standardError ?? ""
+    )
   }
 }

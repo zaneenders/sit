@@ -51,8 +51,10 @@ enum GitLocalTransport {
 
     while !queue.isEmpty {
       let sha20 = queue.removeFirst()
-      guard let (typeName, payload) = try? GitObjectDatabase.readObject(
-        gitDir: gitDir, packs: packs, sha20: sha20) else { continue }
+      guard
+        let (typeName, payload) = try? GitObjectDatabase.readObject(
+          gitDir: gitDir, packs: packs, sha20: sha20)
+      else { continue }
 
       packObjects.append(
         GitPackWriter.PackObject(sha20: sha20, type: typeNumber(typeName), payload: payload))
@@ -137,16 +139,21 @@ enum GitLocalTransport {
 
     var result: [(String, String)] = []
     var seen = Set<String>()
-    for (name, hex) in loose { result.append((name, hex)); seen.insert(name) }
+    for (name, hex) in loose {
+      result.append((name, hex))
+      seen.insert(name)
+    }
     for (name, hex) in packed where !seen.contains(name) { result.append((name, hex)) }
     return result
   }
 
   private static func scanLooseRefs(at dir: URL, prefix: String, into out: inout [String: String]) {
     let fm = FileManager.default
-    guard let items = try? fm.contentsOfDirectory(
-      at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
-    ) else { return }
+    guard
+      let items = try? fm.contentsOfDirectory(
+        at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+      )
+    else { return }
     for item in items {
       let name = "\(prefix)/\(item.lastPathComponent)"
       var isDir: ObjCBool = false
@@ -154,7 +161,8 @@ enum GitLocalTransport {
       if isDir.boolValue {
         scanLooseRefs(at: item, prefix: name, into: &out)
       } else if let hex = try? String(contentsOf: item, encoding: .utf8)
-        .trimmingCharacters(in: .whitespacesAndNewlines), hex.count == 40 {
+        .trimmingCharacters(in: .whitespacesAndNewlines), hex.count == 40
+      {
         out[name] = hex
       }
     }
@@ -163,9 +171,9 @@ enum GitLocalTransport {
   private static func childSHAs(type: String, payload: [UInt8]) -> [[UInt8]] {
     switch type {
     case "commit": return commitChildren(payload)
-    case "tree":   return treeChildren(payload)
-    case "tag":    return tagChildren(payload)
-    default:       return []
+    case "tree": return treeChildren(payload)
+    case "tag": return tagChildren(payload)
+    default: return []
     }
   }
 
