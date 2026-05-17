@@ -27,7 +27,12 @@ enum GitPull {
     }
     let branch = branchRef.replacingOccurrences(of: "refs/heads/", with: "")
 
-    // 2. Resolve upstream remote and merge ref
+    // 2. Refuse to overwrite local changes
+    if try GitWorkdirStatusText.hasUncommittedChanges(gitDir: gitDir, workTree: workTree) {
+      throw Error.workTreeDirty
+    }
+
+    // 3. Resolve upstream remote and merge ref
     guard let bc = try GitRemoteConfig.readBranchConfig(gitDir: gitDir, branch: branch),
       let upstreamRemoteName = remoteName ?? bc.remoteName,
       let mergeRef = bc.mergeRef
@@ -40,17 +45,17 @@ enum GitPull {
       throw Error.remoteNotFound(upstreamRemoteName)
     }
 
-    // 3. Determine the fetch refspec
+    // 4. Determine the fetch refspec
     let fetchRefspec = "\(mergeRef):\(mergeRef)"
 
-    // 4. Fetch
+    // 5. Fetch
     _ = try await GitFetch.fetch(
       gitDir: gitDir,
       workTree: workTree,
       remote: remote,
       refspecs: [fetchRefspec])
 
-    // 5. Determine the fetched tracking ref
+    // 6. Determine the fetched tracking ref
     let trackingRef: String
     if mergeRef.hasPrefix("refs/heads/") {
       let remoteBranch = String(mergeRef.dropFirst(11))
@@ -71,7 +76,7 @@ enum GitPull {
       return
     }
 
-    // 6. Determine merge strategy
+    // 7. Determine merge strategy
     if ourHex == fetchedHex {
       print("Already up to date.")
       return
@@ -270,21 +275,19 @@ enum GitPull {
             let mergedSHA = try GitHex.decode20(mergedHex)
             mergedEntries.append((o.mode, name, mergedSHA))
           } else {
-            // File-level conflict: take ours (simple strategy)
-            mergedEntries.append((o.mode, name, o.sha20))
-            warn("conflict in '\(name)', keeping our version")
+            // File-level conflict — fail like real Git
+            throw Error.mergeConflict("conflict in '\(name)': both sides modified")
           }
         } else {
-          // Both added same-named entry differently — take ours
-          mergedEntries.append((o.mode, name, o.sha20))
-          warn("both added '\(name)' differently, keeping our version")
+          // Both added same-named entry differently
+          throw Error.mergeConflict("both added '\(name)' differently")
         }
       case (.some(let o), nil):
         // Only we have it — keep if changed from base, drop if deleted by them
         if base == nil || (base?.mode != o.mode || base?.sha20 != o.sha20) {
           // Check if they deleted it intentionally
           if base != nil {
-            warn("'\(name)' deleted by them, modified by us — keeping ours")
+            throw Error.mergeConflict("'\(name)' deleted by them, modified by us")
           }
           mergedEntries.append((o.mode, name, o.sha20))
         }
@@ -293,7 +296,7 @@ enum GitPull {
         // Only they have it — take theirs if changed from base
         if base == nil || (base?.mode != t.mode || base?.sha20 != t.sha20) {
           if base != nil {
-            warn("'\(name)' deleted by us, modified by them — taking theirs")
+            throw Error.mergeConflict("'\(name)' deleted by us, modified by them")
           }
           mergedEntries.append((t.mode, name, t.sha20))
         }
@@ -306,11 +309,6 @@ enum GitPull {
     let treeSHA = try GitLooseObjectWriter.writeTree(
       gitDir: gitDir, entries: mergedEntries)
     return GitHex.encodeLower(treeSHA)
-  }
-
-  private static func warn(_ message: String) {
-    let msg = "warning: \(message)\n"
-    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
   }
 
   private typealias TreeEntry = GitObjectParser.TreeEntry

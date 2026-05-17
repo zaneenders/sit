@@ -14,13 +14,6 @@ enum GitPush {
     case pushRejected(String)
   }
 
-  // MARK: - URL conversion
-
-  /// Detect SSH Git URLs and return the parsed SSH URL, or `nil` for HTTP(S) URLs.
-  private static func detectSSH(_ url: String) -> GitSSHTransport.SSHURL? {
-    GitSSHTransport.parseSSHURL(url)
-  }
-
   // MARK: - Public entry point
 
   /// Push the current branch to its configured upstream remote (or `remoteName`
@@ -77,14 +70,17 @@ enum GitPush {
     var refUpdates: [(oldSha40: String, newSha40: String, refName: String)] = []
     var remoteSHAsToAvoid = Set<String>()
 
+    // Seed with all remote ref SHAs so we don't pack objects the remote
+    // already has via any branch, not just the one we're pushing to.
+    for ref in advert.refs where ref.sha20 != [UInt8](repeating: 0, count: 20) {
+      remoteSHAsToAvoid.insert(GitHex.encodeLower(ref.sha20))
+    }
+
     for spec in pushRefspecs {
       let (_, dst) = parseRefspec(spec, branch: branch, branchRef: branchRef)
       let remoteSHA = advert.refs.first { $0.name == dst }?.sha20
       let remoteHex = remoteSHA.map { GitHex.encodeLower($0) } ?? String(repeating: "0", count: 40)
       refUpdates.append((oldSha40: remoteHex, newSha40: ourSHA, refName: dst))
-      if let rh = remoteSHA.map({ GitHex.encodeLower($0) }) {
-        remoteSHAsToAvoid.insert(rh)
-      }
     }
 
     // 6. Collect and pack objects the remote doesn't have

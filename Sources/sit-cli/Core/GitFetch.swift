@@ -30,7 +30,7 @@ enum GitFetch {
     let advert: GitSmartHTTP.RefAdvertisement
     let displayURL: String
 
-    if let ssh = GitSSHTransport.parseSSHURL(rawURL) {
+    if let ssh = GitURL.detectSSH(rawURL) {
       displayURL = "git@\(ssh.host):\(ssh.path)"
       advert = try await GitSSHTransport.advertiseFetchRefs(ssh: ssh)
     } else if GitLocalTransport.isLocalURL(rawURL) {
@@ -62,7 +62,7 @@ enum GitFetch {
 
     // 4. Fetch pack from remote
     let packData: [UInt8]
-    if let ssh = GitSSHTransport.parseSSHURL(rawURL) {
+    if let ssh = GitURL.detectSSH(rawURL) {
       packData = try await GitSSHTransport.fetch(
         ssh: ssh,
         wantHashes: Array(wantHashes),
@@ -94,7 +94,8 @@ enum GitFetch {
     }
 
     if result.unresolvedDeltas > 0 {
-      fputs("warning: \(result.unresolvedDeltas) delta objects could not be resolved\n", stderr)
+      let msg = "warning: \(result.unresolvedDeltas) delta objects could not be resolved\n"
+      try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
     }
 
     // 6. Update remote-tracking refs
@@ -128,12 +129,29 @@ enum GitFetch {
     if let headHex = try? GitHEAD.resolveCommitHex(gitDir: gitDir) {
       haveHashes.insert(headHex)
     }
+
+    // Loose refs under refs/heads/
     let refsDir = gitDir.appendingPathComponent("refs/heads", isDirectory: true)
     if FileManager.default.fileExists(atPath: refsDir.path) {
       if let refs = try? collectRefs(in: refsDir, base: gitDir, prefix: "refs/heads/") {
         haveHashes.formUnion(refs.values)
       }
     }
+
+    // Packed refs (refs/heads/* only — never refs/remotes/*)
+    let packedURL = gitDir.appendingPathComponent("packed-refs")
+    if let text = try? String(contentsOf: packedURL, encoding: .utf8) {
+      for line in text.split(separator: "\n") {
+        let s = String(line)
+        guard !s.hasPrefix("#"), !s.hasPrefix("^") else { continue }
+        let parts = s.split(separator: " ", maxSplits: 1)
+        guard parts.count == 2, parts[0].count == 40 else { continue }
+        let refName = String(parts[1])
+        guard refName.hasPrefix("refs/heads/") else { continue }
+        haveHashes.insert(String(parts[0]))
+      }
+    }
+
     return haveHashes
   }
 

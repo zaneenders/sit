@@ -4,6 +4,7 @@ import NIOCore
 import NIOPosix
 import NIOSSH
 import Sit
+import Synchronization
 
 /// Git smart protocol over SSH using swift-nio-ssh.
 ///
@@ -11,8 +12,6 @@ import Sit
 /// ed25519 key from ~/.ssh/id_ed25519, runs git-upload-pack / git-receive-pack
 /// in a session channel, and exchanges pkt-line frames over that channel.
 enum GitSSHTransport {
-
-  // MARK: - SSH URL parsing
 
   struct SSHURL: Equatable {
     let host: String
@@ -329,7 +328,10 @@ enum GitSSHTransport {
 
 /// Executes a remote command over an SSH session channel.
 /// Writes `inputBytes` to stdin, closes write half, collects all stdout.
-final class GitCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
+///
+/// All mutable state is guarded by `Mutex` so the handler is
+/// concurrency-safe without `@unchecked Sendable`.
+final class GitCommandHandler: ChannelDuplexHandler, Sendable {
   typealias InboundIn = SSHChannelData
   typealias InboundOut = Never
   typealias OutboundIn = Never
@@ -338,13 +340,15 @@ final class GitCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
   private let command: String
   private let inputBytes: [UInt8]
   private let resultPromise: EventLoopPromise<[UInt8]>
-  private var accumulator: [UInt8] = []
-  private var exitCode: Int?
+  private let accumulator: Mutex<[UInt8]>
+  private let exitCode: Mutex<Int?>
 
   init(command: String, inputBytes: [UInt8], resultPromise: EventLoopPromise<[UInt8]>) {
     self.command = command
     self.inputBytes = inputBytes
     self.resultPromise = resultPromise
+    self.accumulator = Mutex([])
+    self.exitCode = Mutex(nil)
   }
 
   func channelActive(context: ChannelHandlerContext) {
@@ -375,21 +379,23 @@ final class GitCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
   func channelRead(context: ChannelHandlerContext, data: NIOAny) {
     let sshData = unwrapInboundIn(data)
     guard case .channel = sshData.type, case .byteBuffer(let buf) = sshData.data else { return }
-    accumulator.append(contentsOf: buf.readableBytesView)
+    accumulator.withLock { $0.append(contentsOf: buf.readableBytesView) }
   }
 
   func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
     if let exit = event as? SSHChannelRequestEvent.ExitStatus {
-      exitCode = exit.exitStatus
+      exitCode.withLock { $0 = exit.exitStatus }
     }
     context.fireUserInboundEventTriggered(event)
   }
 
   func channelInactive(context: ChannelHandlerContext) {
-    if let code = exitCode, code != 0 {
+    let code = exitCode.withLock { $0 }
+    let acc = accumulator.withLock { $0 }
+    if let code, code != 0 {
       resultPromise.fail(GitSSHError.commandFailed(exitCode: Int32(code)))
     } else {
-      resultPromise.succeed(accumulator)
+      resultPromise.succeed(acc)
     }
   }
 
@@ -401,25 +407,30 @@ final class GitCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
 
 // MARK: - Auth delegates
 
-final class KeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
+final class KeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, Sendable {
   private let username: String
   private let key: NIOSSHPrivateKey
-  private var offered = false
+  private let offered: Mutex<Bool>
 
   init(username: String, key: NIOSSHPrivateKey) {
     self.username = username
     self.key = key
+    self.offered = Mutex(false)
   }
 
   func nextAuthenticationType(
     availableMethods: NIOSSHAvailableUserAuthenticationMethods,
     nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
   ) {
-    guard !offered, availableMethods.contains(.publicKey) else {
+    let alreadyOffered = offered.withLock { o -> Bool in
+      if o { return true }
+      o = true
+      return false
+    }
+    guard !alreadyOffered, availableMethods.contains(.publicKey) else {
       nextChallengePromise.succeed(nil)
       return
     }
-    offered = true
     nextChallengePromise.succeed(
       NIOSSHUserAuthenticationOffer(
         username: username,
@@ -430,11 +441,13 @@ final class KeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked 
   }
 }
 
-final class AcceptAnyHostKey: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
+final class AcceptAnyHostKey: NIOSSHClientServerAuthenticationDelegate, Sendable {
   func validateHostKey(
     hostKey: NIOSSHPublicKey,
     validationCompletePromise: EventLoopPromise<Void>
   ) {
+    let msg = "warning: SSH host key verification is not implemented — accepting all keys\n"
+    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
     validationCompletePromise.succeed(())
   }
 }

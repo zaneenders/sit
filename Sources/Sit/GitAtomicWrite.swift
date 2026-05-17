@@ -1,5 +1,9 @@
 import SystemPackage
 
+#if canImport(System)
+import System
+#endif
+
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)

@@ -1,6 +1,10 @@
 public import Foundation
 import SystemPackage
 
+#if canImport(System)
+import System
+#endif
+
 public enum GitStaging: Sendable {
   /// Create a commit from the current `.git/index`, update `HEAD`'s branch ref (or detached `HEAD`), return commit id hex.
   /// `authorDate` and `committerDate` allow the two timestamps to differ (as real Git does);

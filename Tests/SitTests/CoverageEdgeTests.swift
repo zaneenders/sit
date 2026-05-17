@@ -311,11 +311,13 @@ struct CoverageEdgeTests: ~Copyable {
 
   // MARK: - GitPack.objectTypeAndPayload
 
-  @Test func objectTypeAndPayloadReturnsType() async throws {
-    let (pack, idx) = try Self.loadSitPack()
+  @Test func objectTypeAndPayloadReturnsType() throws {
+    let (pack, idx) = try Self.syntheticPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
-    // Known undeltified blob from the pack
-    let sha = GitDogfoodHelpers.sha20(fromHex40: "90983f8ae8fe9c65756a363085cda5013c2e4498")!
+    // The synthetic pack contains a single blob "hello\n"
+    let blobContent: [UInt8] = [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]
+    let body: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let sha = GitSHA1.digest(of: body)
     let (type, payload) = try gitPack.objectTypeAndPayload(sha20: sha)
     #expect(type == 3)  // blob
     #expect(!payload.isEmpty)
@@ -400,7 +402,7 @@ struct CoverageEdgeTests: ~Copyable {
   // MARK: - GitPack error path: shaNotFoundInIndex via objectTypeAndPayload
 
   @Test func objectTypeAndPayloadThrowsForUnknownSha() throws {
-    let (pack, idx) = try Self.loadSitPack()
+    let (pack, idx) = try Self.syntheticPack()
     let gitPack = try GitPack(packBytes: pack, indexBytes: idx)
     let missing = [UInt8](repeating: 0xab, count: 20)
     #expect(throws: GitPackError.shaNotFoundInIndex) {
@@ -410,21 +412,12 @@ struct CoverageEdgeTests: ~Copyable {
 
   // MARK: - Helpers
 
-  private static func loadSitPack() throws -> (pack: [UInt8], idx: [UInt8]) {
-    let root = GitDogfoodHelpers.packageRoot(testFile: #filePath)
-    let packDir = root.appendingPathComponent(".git/objects/pack", isDirectory: true)
-    let fm = FileManager.default
-    guard
-      let packName = try fm.contentsOfDirectory(atPath: packDir.path)
-        .first(where: { $0.hasSuffix(".pack") })?
-        .replacingOccurrences(of: ".pack", with: "")
-    else {
-      throw GitPackError.badPackSignature  // no pack found
-    }
-    let packURL = packDir.appendingPathComponent("\(packName).pack")
-    let idxURL = packDir.appendingPathComponent("\(packName).idx")
-    let pack = try [UInt8](Data(contentsOf: packURL))
-    let idx = try [UInt8](Data(contentsOf: idxURL))
-    return (pack, idx)
+  private static func syntheticPack() throws -> (pack: [UInt8], idx: [UInt8]) {
+    let blobContent: [UInt8] = [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]  // "hello\n"
+    let body: [UInt8] = Array("blob \(blobContent.count)\0".utf8) + blobContent
+    let sha20 = GitSHA1.digest(of: body)
+    let obj = GitPackWriter.PackObject(sha20: sha20, type: 3, payload: blobContent)
+    let result = try GitPackWriter.write(objects: [obj])
+    return (result.packData, result.indexData)
   }
 }
