@@ -16,8 +16,8 @@ import Musl
 /// write to `target.lock`, fsync, then `rename(2)` (atomic on same filesystem).
 enum GitAtomicWrite {
   /// Overwrite `target` atomically. Parent directories must already exist.
-  static func write(_ content: [UInt8], to target: FilePath) throws {
-    let lockPath = FilePath(target.string + ".lock")
+  static func write(_ content: [UInt8], to target: SystemPackage.FilePath) throws {
+    let lockPath = SystemPackage.FilePath(target.string + ".lock")
     let fd = try FileDescriptor.open(
       lockPath, .writeOnly,
       options: [.create, .truncate],

@@ -87,8 +87,15 @@ enum GitLocalTransport {
     }
 
     var results: [String] = []
-    for (_, newSha, refName) in refUpdates {
+    for (oldSha, newSha, refName) in refUpdates {
       do {
+        let currentSha =
+          (try? GitRefs.readRef(gitDir: gitDir, refName: refName))
+          ?? String(repeating: "0", count: 40)
+        guard currentSha.lowercased() == oldSha.lowercased() else {
+          results.append("ng \(refName) non-fast-forward")
+          continue
+        }
         try GitRefs.updateRef(gitDir: gitDir, refName: refName, sha40HexLower: newSha)
         results.append("ok \(refName)")
       } catch {

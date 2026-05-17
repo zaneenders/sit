@@ -9,8 +9,10 @@ import Synchronization
 /// Git smart protocol over SSH using swift-nio-ssh.
 ///
 /// Opens a single TCP connection per operation, authenticates with the user's
-/// ed25519 key from ~/.ssh/id_ed25519, runs git-upload-pack / git-receive-pack
-/// in a session channel, and exchanges pkt-line frames over that channel.
+/// ed25519 key from ~/.ssh/id_ed25519, and exchanges pkt-line frames.
+///
+/// Push uses one session (advertisement + pack in the same channel).
+/// Fetch uses one session (upload-pack).
 enum GitSSHTransport {
 
   struct SSHURL: Equatable {
@@ -44,12 +46,6 @@ enum GitSSHTransport {
   }
 
   // MARK: - Git protocol operations
-
-  /// Read the ref advertisement for push (git-receive-pack).
-  static func advertiseRefs(ssh: SSHURL) async throws -> GitSmartHTTP.RefAdvertisement {
-    let bytes = try await run(ssh: ssh, service: "git-receive-pack", input: [])
-    return GitSmartHTTP.parseRefAdvertisement(bytes)
-  }
 
   /// Read the ref advertisement for fetch (git-upload-pack).
   static func advertiseFetchRefs(ssh: SSHURL) async throws -> GitSmartHTTP.RefAdvertisement {
@@ -90,37 +86,49 @@ enum GitSSHTransport {
     return GitSmartHTTP.parseFetchResponse(responseBytes)
   }
 
-  /// Push ref updates and a packfile to the remote.
+  /// Push ref updates and a packfile to the remote in a single SSH session.
+  ///
+  /// - Parameter buildPayload: Called with the server's ref advertisement.
+  ///   Return the full pkt-line-encoded push request (commands + flush + packdata),
+  ///   or throw `NothingToPush` to abort cleanly.
   static func push(
     ssh: SSHURL,
+    buildPayload: @Sendable @escaping (GitSmartHTTP.RefAdvertisement) throws -> [UInt8]
+  ) async throws -> [String] {
+    let key = try loadSSHKey()
+    let command = "git-receive-pack '\(ssh.path)'"
+    let statusBytes = try await executePushCommand(
+      host: ssh.host, port: 22, user: ssh.user,
+      privateKey: key, command: command, buildPayload: buildPayload)
+    return parsePushStatus(statusBytes)
+  }
+
+  /// Build the serialized push request: pkt-line ref-update commands, a flush,
+  /// and the raw packfile.  Shared between SSH and HTTP transports.
+  static func encodePushRequest(
     refUpdates: [(oldSha40: String, newSha40: String, refName: String)],
     packData: [UInt8],
-    capabilities: Set<String> = []
-  ) async throws -> [String] {
-    // Omit side-band-64k: we parse plain pkt-line status only.
+    capabilities: Set<String>
+  ) -> [UInt8] {
     let capStr = capabilities.filter {
       ["report-status", "delete-refs"].contains($0)
     }.joined(separator: " ")
 
-    var request: [UInt8] = []
+    var payload: [UInt8] = []
     for (old, new, ref) in refUpdates {
       let line =
         capStr.isEmpty
         ? "\(old) \(new) \(ref)\n"
         : "\(old) \(new) \(ref)\0\(capStr)\n"
-      request.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
+      payload.append(contentsOf: GitPktLine.encode(Array(line.utf8)))
     }
-    request.append(contentsOf: GitPktLine.flush)
-    request.append(contentsOf: packData)
-
-    let responseBytes = try await run(ssh: ssh, service: "git-receive-pack", input: request)
-    return parsePushStatus(responseBytes)
+    payload.append(contentsOf: GitPktLine.flush)
+    payload.append(contentsOf: packData)
+    return payload
   }
 
-  // MARK: - Core: run a git service over SSH
+  // MARK: - Core: run a git service (fetch / upload-pack)
 
-  /// Open an SSH connection, exec `<service> '<path>'`, write `input` to stdin,
-  /// close stdin, and return all stdout bytes.
   private static func run(ssh: SSHURL, service: String, input: [UInt8]) async throws -> [UInt8] {
     let key = try loadSSHKey()
     let command = "\(service) '\(ssh.path)'"
@@ -128,6 +136,8 @@ enum GitSSHTransport {
       host: ssh.host, port: 22, user: ssh.user,
       privateKey: key, command: command, inputBytes: input)
   }
+
+  // MARK: - Execute: simple (write-all then read-all)
 
   private static func executeCommand(
     host: String, port: Int, user: String,
@@ -140,7 +150,7 @@ enum GitSSHTransport {
         channel.eventLoop.makeCompletedFuture {
           let sshConfig = SSHClientConfiguration(
             userAuthDelegate: KeyAuthDelegate(username: user, key: privateKey),
-            serverAuthDelegate: AcceptAnyHostKey()
+            serverAuthDelegate: KnownHostsDelegate(host: host)
           )
           let handler = NIOSSHHandler(
             role: .client(sshConfig),
@@ -155,32 +165,80 @@ enum GitSSHTransport {
 
     let channel = try await bootstrap.connect(host: host, port: port).get()
 
-    // Submit all NIOSSHHandler work to the event loop to avoid
-    // crossing async boundaries with non-Sendable NIOSSHHandler.
     let resultFuture: EventLoopFuture<[UInt8]> = try await channel.eventLoop.submit {
-      let sshHandler = try channel.pipeline.syncOperations.handler(
-        type: NIOSSHHandler.self)
+      let sshHandler = try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
       let childPromise = channel.eventLoop.makePromise(of: Channel.self)
       let resultPromise = channel.eventLoop.makePromise(of: [UInt8].self)
 
       sshHandler.createChannel(childPromise) { childChannel, channelType in
         guard channelType == .session else {
-          return childChannel.eventLoop.makeFailedFuture(
-            GitSSHError.invalidChannelType)
+          return childChannel.eventLoop.makeFailedFuture(GitSSHError.invalidChannelType)
         }
         return childChannel.eventLoop.makeCompletedFuture {
           try childChannel.pipeline.syncOperations.addHandler(
             GitCommandHandler(
               command: command,
               inputBytes: inputBytes,
-              resultPromise: resultPromise)
-          )
+              resultPromise: resultPromise))
         }
       }
 
-      return childPromise.futureResult.flatMap { _ in
-        resultPromise.futureResult
+      return childPromise.futureResult.flatMap { _ in resultPromise.futureResult }
+    }.get()
+
+    let bytes = try await resultFuture.get()
+    try? await channel.close().get()
+    return bytes
+  }
+
+  // MARK: - Execute: bidirectional push (advertisement → payload → status)
+
+  private static func executePushCommand(
+    host: String, port: Int, user: String,
+    privateKey: NIOSSHPrivateKey, command: String,
+    buildPayload: @Sendable @escaping (GitSmartHTTP.RefAdvertisement) throws -> [UInt8]
+  ) async throws -> [UInt8] {
+    let group = MultiThreadedEventLoopGroup.singleton
+
+    let bootstrap = ClientBootstrap(group: group)
+      .channelInitializer { channel in
+        channel.eventLoop.makeCompletedFuture {
+          let sshConfig = SSHClientConfiguration(
+            userAuthDelegate: KeyAuthDelegate(username: user, key: privateKey),
+            serverAuthDelegate: KnownHostsDelegate(host: host)
+          )
+          let handler = NIOSSHHandler(
+            role: .client(sshConfig),
+            allocator: channel.allocator,
+            inboundChildChannelInitializer: nil
+          )
+          try channel.pipeline.syncOperations.addHandler(handler)
+        }
       }
+      .channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
+      .connectTimeout(.seconds(30))
+
+    let channel = try await bootstrap.connect(host: host, port: port).get()
+
+    let resultFuture: EventLoopFuture<[UInt8]> = try await channel.eventLoop.submit {
+      let sshHandler = try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+      let childPromise = channel.eventLoop.makePromise(of: Channel.self)
+      let resultPromise = channel.eventLoop.makePromise(of: [UInt8].self)
+
+      sshHandler.createChannel(childPromise) { childChannel, channelType in
+        guard channelType == .session else {
+          return childChannel.eventLoop.makeFailedFuture(GitSSHError.invalidChannelType)
+        }
+        return childChannel.eventLoop.makeCompletedFuture {
+          try childChannel.pipeline.syncOperations.addHandler(
+            GitPushSessionHandler(
+              command: command,
+              buildPayload: buildPayload,
+              resultPromise: resultPromise))
+        }
+      }
+
+      return childPromise.futureResult.flatMap { _ in resultPromise.futureResult }
     }.get()
 
     let bytes = try await resultFuture.get()
@@ -190,22 +248,17 @@ enum GitSSHTransport {
 
   // MARK: - SSH key loading
 
-  /// Load the first available unencrypted ed25519 key from ~/.ssh/.
   private static func loadSSHKey() throws -> NIOSSHPrivateKey {
     let sshDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ssh")
-    for name in ["id_ed25519"] {
-      let path = sshDir.appendingPathComponent(name)
-      guard FileManager.default.fileExists(atPath: path.path),
-        let pem = try? String(contentsOf: path, encoding: .utf8)
-      else { continue }
-      if let key = try? parseEd25519Key(pem) {
-        return NIOSSHPrivateKey(ed25519Key: key)
-      }
-    }
-    throw GitSSHError.noSSHKeyFound
+    let path = sshDir.appendingPathComponent("id_ed25519")
+    guard FileManager.default.fileExists(atPath: path.path),
+      let pem = try? String(contentsOf: path, encoding: .utf8)
+    else { throw GitSSHError.noSSHKeyFound }
+    let key = try parseEd25519Key(pem)
+    return NIOSSHPrivateKey(ed25519Key: key)
   }
 
-  /// Parse an unencrypted OpenSSH ed25519 private key file and return the raw key.
+  /// Parse an unencrypted OpenSSH ed25519 private key file.
   private static func parseEd25519Key(_ pem: String) throws -> Curve25519.Signing.PrivateKey {
     let b64 = pem.components(separatedBy: .newlines)
       .filter { !$0.hasPrefix("-----") && !$0.isEmpty }
@@ -235,7 +288,7 @@ enum GitSSHTransport {
       return try readExact(len)
     }
 
-    // Magic: "openssh-key-v1\0" (15 bytes)
+    // Magic: "openssh-key-v1\0" (15 bytes including null terminator)
     let magic = try readExact(15)
     guard String(bytes: magic, encoding: .ascii) == "openssh-key-v1\0" else {
       throw GitSSHError.keyParseError("not an OpenSSH private key")
@@ -299,8 +352,7 @@ enum GitSSHTransport {
 
   // MARK: - Push status parsing
 
-  /// Parse the server's push status, skipping the ref advertisement that git-receive-pack
-  /// sends before reading our commands (second SSH session re-runs the command).
+  /// Parse the server's push status response (after the ref advertisement flush).
   static func parsePushStatus(_ data: [UInt8]) -> [String] {
     var lines: [String] = []
     var pos = 0
@@ -322,15 +374,28 @@ enum GitSSHTransport {
     }
     return lines
   }
+
+  // MARK: - pkt-line helpers
+
+  /// Return the byte offset right after the first flush packet in `bytes`,
+  /// or `nil` if a complete flush hasn't arrived yet.
+  static func findFlushEnd(in bytes: [UInt8]) -> Int? {
+    var pos = 0
+    while pos < bytes.count {
+      guard let (packet, consumed) = GitPktLine.decodeOne(from: bytes, at: pos) else {
+        return nil
+      }
+      pos += consumed
+      if case .flush = packet { return pos }
+    }
+    return nil
+  }
 }
 
-// MARK: - NIO channel handler
+// MARK: - Simple command handler (fetch / upload-pack)
 
 /// Executes a remote command over an SSH session channel.
 /// Writes `inputBytes` to stdin, closes write half, collects all stdout.
-///
-/// All mutable state is guarded by `Mutex` so the handler is
-/// concurrency-safe without `@unchecked Sendable`.
 final class GitCommandHandler: ChannelDuplexHandler, Sendable {
   typealias InboundIn = SSHChannelData
   typealias InboundOut = Never
@@ -405,6 +470,135 @@ final class GitCommandHandler: ChannelDuplexHandler, Sendable {
   }
 }
 
+// MARK: - Bidirectional push handler
+
+/// Runs git-receive-pack in a single SSH channel.
+///
+/// Phase 1 — advertisement: accumulates bytes until the first flush packet.
+/// Phase 2 — push: calls `buildPayload` with the parsed advertisement,
+///   writes the result to stdin, closes the write half, then accumulates
+///   the status response.
+///
+/// All shared mutable state is guarded by `Mutex` for Sendable conformance.
+final class GitPushSessionHandler: ChannelDuplexHandler, Sendable {
+  typealias InboundIn = SSHChannelData
+  typealias InboundOut = Never
+  typealias OutboundIn = Never
+  typealias OutboundOut = SSHChannelData
+
+  private let command: String
+  private let buildPayload: @Sendable (GitSmartHTTP.RefAdvertisement) throws -> [UInt8]
+  private let resultPromise: EventLoopPromise<[UInt8]>
+
+  private struct State: Sendable {
+    var advertBytes: [UInt8] = []
+    var statusBytes: [UInt8] = []
+    var sentPush: Bool = false
+    var exitCode: Int? = nil
+    var promiseFulfilled: Bool = false
+  }
+  private let state: Mutex<State>
+
+  init(
+    command: String,
+    buildPayload: @Sendable @escaping (GitSmartHTTP.RefAdvertisement) throws -> [UInt8],
+    resultPromise: EventLoopPromise<[UInt8]>
+  ) {
+    self.command = command
+    self.buildPayload = buildPayload
+    self.resultPromise = resultPromise
+    self.state = Mutex(State())
+  }
+
+  func channelActive(context: ChannelHandlerContext) {
+    let channel = context.channel
+    channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+      .flatMap { [command] _ in
+        channel.triggerUserOutboundEvent(
+          SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true))
+      }
+      .whenFailure { [weak self] error in
+        self?.fulfill(.failure(error))
+      }
+  }
+
+  func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+    let sshData = unwrapInboundIn(data)
+    guard case .channel = sshData.type, case .byteBuffer(let buf) = sshData.data else { return }
+    let newBytes = Array(buf.readableBytesView)
+
+    // Determine whether this chunk crosses the advertisement/status boundary.
+    enum Transition { case none, send([UInt8]) }
+
+    let transition = state.withLock { s -> Transition in
+      if s.sentPush {
+        s.statusBytes.append(contentsOf: newBytes)
+        return .none
+      }
+      s.advertBytes.append(contentsOf: newBytes)
+      guard let flushEnd = GitSSHTransport.findFlushEnd(in: s.advertBytes) else {
+        return .none
+      }
+      // Bytes after the flush belong to the status response (rare but possible).
+      let advert = Array(s.advertBytes[0..<flushEnd])
+      s.statusBytes.append(contentsOf: s.advertBytes[flushEnd...])
+      s.advertBytes = []
+      s.sentPush = true
+      return .send(advert)
+    }
+
+    if case .send(let advertBytes) = transition {
+      let channel = context.channel
+      let advert = GitSmartHTTP.parseRefAdvertisement(advertBytes)
+      do {
+        let payload = try buildPayload(advert)
+        let outBuf = channel.allocator.buffer(bytes: payload)
+        let outData = SSHChannelData(type: .channel, data: .byteBuffer(outBuf))
+        channel.writeAndFlush(outData)
+          .flatMap { _ in channel.close(mode: .output) }
+          .whenFailure { [weak self] error in self?.fulfill(.failure(error)) }
+      } catch {
+        fulfill(.failure(error))
+        channel.close(mode: .output, promise: nil)
+      }
+    }
+  }
+
+  func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+    if let exit = event as? SSHChannelRequestEvent.ExitStatus {
+      state.withLock { $0.exitCode = exit.exitStatus }
+    }
+    context.fireUserInboundEventTriggered(event)
+  }
+
+  func channelInactive(context: ChannelHandlerContext) {
+    let s = state.withLock { $0 }
+    if let code = s.exitCode, code != 0 {
+      fulfill(.failure(GitSSHError.commandFailed(exitCode: Int32(code))))
+    } else {
+      fulfill(.success(s.statusBytes))
+    }
+  }
+
+  func errorCaught(context: ChannelHandlerContext, error: Error) {
+    fulfill(.failure(error))
+    context.close(promise: nil)
+  }
+
+  private func fulfill(_ result: Result<[UInt8], Error>) {
+    let shouldFulfill = state.withLock { s -> Bool in
+      guard !s.promiseFulfilled else { return false }
+      s.promiseFulfilled = true
+      return true
+    }
+    guard shouldFulfill else { return }
+    switch result {
+    case .success(let bytes): resultPromise.succeed(bytes)
+    case .failure(let error): resultPromise.fail(error)
+    }
+  }
+}
+
 // MARK: - Auth delegates
 
 final class KeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, Sendable {
@@ -441,14 +635,109 @@ final class KeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, Sendable {
   }
 }
 
-final class AcceptAnyHostKey: NIOSSHClientServerAuthenticationDelegate, Sendable {
+// MARK: - Known-hosts host key verification
+
+/// Validates SSH server host keys against `~/.ssh/known_hosts`.
+///
+/// - If a matching key is found: accept.
+/// - If entries exist for the host but none match: reject (potential MITM).
+/// - If no entries exist for the host: TOFU — print a warning, accept, and
+///   append the key to `~/.ssh/known_hosts`.
+final class KnownHostsDelegate: NIOSSHClientServerAuthenticationDelegate, Sendable {
+  private let host: String
+
+  init(host: String) {
+    self.host = host
+  }
+
   func validateHostKey(
     hostKey: NIOSSHPublicKey,
     validationCompletePromise: EventLoopPromise<Void>
   ) {
-    let msg = "warning: SSH host key verification is not implemented — accepting all keys\n"
-    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
-    validationCompletePromise.succeed(())
+    let knownHostsURL = URL(fileURLWithPath: NSHomeDirectory())
+      .appendingPathComponent(".ssh/known_hosts")
+    let text = (try? String(contentsOf: knownHostsURL, encoding: .utf8)) ?? ""
+    let knownKeys = parseKnownHosts(text: text, host: host)
+
+    if knownKeys.isEmpty {
+      let keyType = serializedKeyType(hostKey)
+      let msg =
+        "Warning: permanently added '\(host)' (\(keyType)) to the list of known hosts.\n"
+      try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
+      appendToKnownHosts(url: knownHostsURL, host: host, key: hostKey)
+      validationCompletePromise.succeed(())
+    } else if knownKeys.contains(hostKey) {
+      validationCompletePromise.succeed(())
+    } else {
+      let fp = fingerprint(of: hostKey)
+      let msg = """
+        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+        Host key for '\(host)' has changed.
+        Offending key fingerprint: \(fp)
+        Remove the old entry from ~/.ssh/known_hosts and retry.
+
+        """
+      try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
+      validationCompletePromise.fail(GitSSHError.hostKeyMismatch(host: host))
+    }
+  }
+
+  /// Parse known_hosts lines that match `host` and return their public keys.
+  /// Skips hashed entries (`|1|…`) and comment lines.
+  private func parseKnownHosts(text: String, host: String) -> [NIOSSHPublicKey] {
+    var keys: [NIOSSHPublicKey] = []
+    for raw in text.split(separator: "\n") {
+      let line = String(raw).trimmingCharacters(in: .whitespaces)
+      guard !line.isEmpty, !line.hasPrefix("#"), !line.hasPrefix("|") else { continue }
+      // Format: "patterns keytype base64key [comment]"
+      let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+      guard parts.count >= 3 else { continue }
+      let patterns = String(parts[0])
+      let keyEntry = "\(parts[1]) \(parts[2])"
+      for pattern in patterns.split(separator: ",") {
+        if String(pattern) == host {
+          if let key = try? NIOSSHPublicKey(openSSHPublicKey: keyEntry) {
+            keys.append(key)
+          }
+          break
+        }
+      }
+    }
+    return keys
+  }
+
+  private func appendToKnownHosts(url: URL, host: String, key: NIOSSHPublicKey) {
+    let line = "\(host) \(String(openSSHPublicKey: key))\n"
+    guard let data = line.data(using: .utf8) else { return }
+    if FileManager.default.fileExists(atPath: url.path),
+      let fh = FileHandle(forWritingAtPath: url.path)
+    {
+      defer { fh.closeFile() }
+      fh.seekToEndOfFile()
+      fh.write(data)
+    } else {
+      try? data.write(to: url, options: .atomic)
+    }
+  }
+
+  private func fingerprint(of key: NIOSSHPublicKey) -> String {
+    let s = String(openSSHPublicKey: key)
+    let parts = s.split(separator: " ")
+    guard parts.count >= 2, let raw = Data(base64Encoded: String(parts[1])) else {
+      return "<unknown>"
+    }
+    let digest = SHA256.hash(data: raw)
+    // Standard SSH fingerprint: SHA256:<base64-without-padding>
+    let b64 = Data(digest).base64EncodedString().trimmingCharacters(
+      in: CharacterSet(charactersIn: "="))
+    return "SHA256:\(b64)"
+  }
+
+  private func serializedKeyType(_ key: NIOSSHPublicKey) -> String {
+    String(openSSHPublicKey: key).split(separator: " ").first.map(String.init) ?? "unknown"
   }
 }
 
@@ -461,4 +750,5 @@ enum GitSSHError: Error, Equatable {
   case invalidChannelType
   case commandFailed(exitCode: Int32)
   case badSSHURL(String)
+  case hostKeyMismatch(host: String)
 }

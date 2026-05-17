@@ -14,10 +14,11 @@ enum GitPush {
     case pushRejected(String)
   }
 
+  // Thrown internally when all objects are already on the remote.
+  private struct NothingToPush: Swift.Error {}
+
   // MARK: - Public entry point
 
-  /// Push the current branch to its configured upstream remote (or `remoteName`
-  /// if given), using the given refspecs (or the default push refspec).
   static func push(
     gitDir: URL,
     workTree: URL,
@@ -33,95 +34,71 @@ enum GitPush {
     // 2. Resolve remote + push refspecs
     guard
       let dest = try GitRemoteConfig.resolvePushDestination(
-        gitDir: gitDir,
-        branch: branch,
-        remoteName: remoteName)
-    else {
-      throw Error.noUpstreamConfigured(branch)
-    }
+        gitDir: gitDir, branch: branch, remoteName: remoteName)
+    else { throw Error.noUpstreamConfigured(branch) }
 
     let rawURL = dest.remote.resolvedPushURL
     guard !rawURL.isEmpty else { throw Error.noRemoteURL }
 
     let pushRefspecs = refspecs.isEmpty ? dest.refspecs : refspecs
 
-    // 3. Our branch tip
-    guard let ourSHA = try GitRefs.readRef(gitDir: gitDir, refName: branchRef) else {
-      throw Error.unbornBranch(branch)
-    }
+    // 3. Open packs once — captured by the SSH closure and reused by other paths.
+    let packs = try GitObjectDatabase.openAllPacks(gitDir: gitDir)
 
-    // 4. Discover remote refs (dispatch on transport)
-    let advert: GitSmartHTTP.RefAdvertisement
+    // 4. Dispatch on transport
+    let results: [String]
     let displayURL: String
 
     if let ssh = GitURL.detectSSH(rawURL) {
+      // Single SSH session: advertisement + push in one connection.
       displayURL = "git@\(ssh.host):\(ssh.path)"
-      advert = try await GitSSHTransport.advertiseRefs(ssh: ssh)
-    } else if GitLocalTransport.isLocalURL(rawURL) {
-      displayURL = rawURL
-      advert = try await GitLocalTransport.advertiseRefs(
-        path: GitLocalTransport.localPath(from: rawURL))
+      do {
+        results = try await GitSSHTransport.push(ssh: ssh) { advert in
+          let (refUpdates, packData) = try Self.resolveRefUpdatesAndPack(
+            advert: advert, gitDir: gitDir, packs: packs,
+            pushRefspecs: pushRefspecs, branch: branch, branchRef: branchRef)
+          return GitSSHTransport.encodePushRequest(
+            refUpdates: refUpdates, packData: packData, capabilities: advert.capabilities)
+        }
+      } catch is NothingToPush {
+        print("Everything up-to-date")
+        return
+      }
     } else {
-      displayURL = GitURL.convertToHTTPURL(rawURL)
-      advert = try await GitSmartHTTP.advertiseRefs(url: displayURL)
+      // HTTP or local: get advertisement first, then push.
+      let advert: GitSmartHTTP.RefAdvertisement
+      if GitLocalTransport.isLocalURL(rawURL) {
+        displayURL = rawURL
+        advert = try await GitLocalTransport.advertiseRefs(
+          path: GitLocalTransport.localPath(from: rawURL))
+      } else {
+        displayURL = GitURL.convertToHTTPURL(rawURL)
+        advert = try await GitSmartHTTP.advertiseRefs(url: displayURL)
+      }
+
+      let refUpdates: [(oldSha40: String, newSha40: String, refName: String)]
+      let packData: [UInt8]
+      do {
+        (refUpdates, packData) = try Self.resolveRefUpdatesAndPack(
+          advert: advert, gitDir: gitDir, packs: packs,
+          pushRefspecs: pushRefspecs, branch: branch, branchRef: branchRef)
+      } catch is NothingToPush {
+        print("Everything up-to-date")
+        return
+      }
+
+      if GitLocalTransport.isLocalURL(rawURL) {
+        results = try await GitLocalTransport.push(
+          path: GitLocalTransport.localPath(from: rawURL),
+          refUpdates: refUpdates, packData: packData, capabilities: advert.capabilities)
+      } else {
+        results = try await GitSmartHTTP.push(
+          url: displayURL, refUpdates: refUpdates, packData: packData,
+          capabilities: advert.capabilities)
+      }
     }
 
-    // 5. Resolve refspecs into (remote ref, our SHA, remote SHA) triples
-    var refUpdates: [(oldSha40: String, newSha40: String, refName: String)] = []
-    var remoteSHAsToAvoid = Set<String>()
-
-    // Seed with all remote ref SHAs so we don't pack objects the remote
-    // already has via any branch, not just the one we're pushing to.
-    for ref in advert.refs where ref.sha20 != [UInt8](repeating: 0, count: 20) {
-      remoteSHAsToAvoid.insert(GitHex.encodeLower(ref.sha20))
-    }
-
-    for spec in pushRefspecs {
-      let (_, dst) = parseRefspec(spec, branch: branch, branchRef: branchRef)
-      let remoteSHA = advert.refs.first { $0.name == dst }?.sha20
-      let remoteHex = remoteSHA.map { GitHex.encodeLower($0) } ?? String(repeating: "0", count: 40)
-      refUpdates.append((oldSha40: remoteHex, newSha40: ourSHA, refName: dst))
-    }
-
-    // 6. Collect and pack objects the remote doesn't have
-    let packs = try GitObjectDatabase.openAllPacks(gitDir: gitDir)
-    let objects = try collectObjectsToPush(
-      gitDir: gitDir,
-      packs: packs,
-      tipHex: ourSHA,
-      remoteHexes: remoteSHAsToAvoid)
-
-    // 7. Nothing to push if remote is already up-to-date
-    if objects.isEmpty {
-      print("Everything up-to-date")
-      return
-    }
-
-    let packResult = try GitPackWriter.write(objects: objects)
-
-    // 8. Send to remote (dispatch on transport)
-    let results: [String]
-    if let ssh = GitURL.detectSSH(rawURL) {
-      results = try await GitSSHTransport.push(
-        ssh: ssh,
-        refUpdates: refUpdates,
-        packData: packResult.packData,
-        capabilities: advert.capabilities)
-    } else if GitLocalTransport.isLocalURL(rawURL) {
-      results = try await GitLocalTransport.push(
-        path: GitLocalTransport.localPath(from: rawURL),
-        refUpdates: refUpdates,
-        packData: packResult.packData,
-        capabilities: advert.capabilities)
-    } else {
-      results = try await GitSmartHTTP.push(
-        url: GitURL.convertToHTTPURL(rawURL),
-        refUpdates: refUpdates,
-        packData: packResult.packData,
-        capabilities: advert.capabilities)
-    }
-
-    // 9. Report results
+    // 5. Report results
     var ok = true
     for line in results {
       print(line)
@@ -129,14 +106,15 @@ enum GitPush {
     }
     guard ok else { throw Error.pushRejected("Push rejected by remote") }
 
-    // 10. Update remote-tracking refs
-    for update in refUpdates {
-      let refName = update.refName
-      guard refName.hasPrefix("refs/heads/") else { continue }
-      let remoteBranch = refName.replacingOccurrences(of: "refs/heads/", with: "")
+    // 6. Update remote-tracking refs (works for all transports: src SHAs are still on disk).
+    for spec in pushRefspecs {
+      let (src, dst) = parseRefspec(spec, branch: branch, branchRef: branchRef)
+      guard dst.hasPrefix("refs/heads/"),
+        let srcSHA = try? GitRefs.readRef(gitDir: gitDir, refName: src)
+      else { continue }
+      let remoteBranch = String(dst.dropFirst(11))
       let trackingRef = "refs/remotes/\(dest.remote.name)/\(remoteBranch)"
-      try GitRefs.updateRef(
-        gitDir: gitDir, refName: trackingRef, sha40HexLower: update.newSha40)
+      try GitRefs.updateRef(gitDir: gitDir, refName: trackingRef, sha40HexLower: srcSHA)
     }
 
     print("Pushed \(branch) to \(dest.remote.name) (\(displayURL))")
@@ -144,45 +122,76 @@ enum GitPush {
 
   // MARK: - Refspec parsing
 
-  /// Parse a push refspec like `refs/heads/main:refs/heads/main` or just
-  /// `main` into `(source, destination)` ref names.
-  private static func parseRefspec(
+  static func parseRefspec(
     _ spec: String, branch: String, branchRef: String
   ) -> (src: String, dst: String) {
     let parts = spec.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-    let src: String
-    let dst: String
     if parts.count == 2 {
-      src = expandShortRef(String(parts[0]))
-      dst = expandShortRef(String(parts[1]))
-    } else {
-      // Single arg: push current branch to same name
-      src = branchRef
-      dst = "refs/heads/\(branch)"
+      return (expandShortRef(String(parts[0])), expandShortRef(String(parts[1])))
     }
-    return (src, dst)
+    return (branchRef, "refs/heads/\(branch)")
   }
 
-  /// Expand a short ref name like `main` → `refs/heads/main`.
   private static func expandShortRef(_ name: String) -> String {
     if name.hasPrefix("refs/") { return name }
     if name == "HEAD" { return "HEAD" }
     return "refs/heads/\(name)"
   }
 
+  // MARK: - Build ref updates + pack data
+
+  /// Resolve push refspecs against the advertisement, collect the objects the
+  /// remote doesn't have, and write a packfile.  Throws `NothingToPush` when
+  /// every reachable object is already known to the remote.
+  static func resolveRefUpdatesAndPack(
+    advert: GitSmartHTTP.RefAdvertisement,
+    gitDir: URL,
+    packs: [GitPack],
+    pushRefspecs: [String],
+    branch: String,
+    branchRef: String
+  ) throws -> ([(oldSha40: String, newSha40: String, refName: String)], [UInt8]) {
+    // Seed the "remote already has" set with every advertised SHA.
+    var remoteSHAsToAvoid = Set<String>()
+    for ref in advert.refs where ref.sha20 != [UInt8](repeating: 0, count: 20) {
+      remoteSHAsToAvoid.insert(GitHex.encodeLower(ref.sha20))
+    }
+
+    var refUpdates: [(oldSha40: String, newSha40: String, refName: String)] = []
+    for spec in pushRefspecs {
+      let (src, dst) = parseRefspec(spec, branch: branch, branchRef: branchRef)
+      guard let srcSHA = try GitRefs.readRef(gitDir: gitDir, refName: src) else {
+        throw Error.unbornBranch(src)
+      }
+      let remoteSHA = advert.refs.first { $0.name == dst }?.sha20
+      let remoteHex =
+        remoteSHA.map { GitHex.encodeLower($0) } ?? String(repeating: "0", count: 40)
+      refUpdates.append((oldSha40: remoteHex, newSha40: srcSHA, refName: dst))
+    }
+
+    let tipHexes = refUpdates.map(\.newSha40)
+    let objects = try collectObjectsToPush(
+      gitDir: gitDir, packs: packs, tipHexes: tipHexes, remoteHexes: remoteSHAsToAvoid)
+
+    guard !objects.isEmpty else { throw NothingToPush() }
+
+    let packResult = try GitPackWriter.write(objects: objects)
+    return (refUpdates, packResult.packData)
+  }
+
   // MARK: - Object graph walking
 
-  /// Collect all objects reachable from `tipHex` that are not already
+  /// Collect all objects reachable from any tip in `tipHexes` that are not
   /// reachable from any SHA in `remoteHexes`.
   private static func collectObjectsToPush(
     gitDir: URL,
     packs: [GitPack],
-    tipHex: String,
+    tipHexes: [String],
     remoteHexes: Set<String>
   ) throws -> [GitPackWriter.PackObject] {
     var objects: [GitPackWriter.PackObject] = []
-    var visited: Set<String> = remoteHexes  // Don't traverse beyond what remote has
-    var queue: [String] = [tipHex]
+    var visited: Set<String> = remoteHexes
+    var queue: [String] = tipHexes.filter { !remoteHexes.contains($0) }
 
     while let shaHex = queue.first {
       queue.removeFirst()
@@ -206,8 +215,6 @@ enum GitPush {
         for entry in GitObjectParser.parseTree(payload) {
           queue.append(GitHex.encodeLower(entry.sha20))
         }
-      case "blob", "tag":
-        break
       default:
         break
       }

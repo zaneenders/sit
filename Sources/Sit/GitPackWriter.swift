@@ -84,11 +84,12 @@ public enum GitPackWriter: Sendable {
       // encoded in the pack object header.
       let compressed = try ZlibLooseObject.compress(obj.payload)
 
-      // CRC-32 of the compressed bytes (zlib stream)
-      let crc32 = CRC32.checksum(of: Array(compressed))
-
       // Pack object header
       let header = encodePackObjectHeader(type: obj.type, size: obj.payload.count)
+
+      // CRC-32 of the full pack object (header + compressed data), per index v2 spec
+      let crc32 = CRC32.checksum(of: header + Array(compressed))
+
       packBody.append(contentsOf: header)
       packBody.append(contentsOf: compressed)
 
